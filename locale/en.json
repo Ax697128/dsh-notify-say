@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Desktop Notify",
+    "description": "Windows toast + voice reminders when a turn completes, fails, is blocked, or an approval is requested. Toast button opens dsh:// (window-level)."
+  }
+}

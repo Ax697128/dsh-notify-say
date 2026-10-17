@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.tmp/
+tmp/
+# 增益临时文件
+dsh-gain-*.wav

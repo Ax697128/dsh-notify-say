@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "桌面提醒",
+    "description": "回合完成 / 出错 / 被阻塞 / 需要审批时弹 Windows Toast 并按配置播语音；Toast 按钮通过 dsh:// 唤起窗口（仅窗口级）。"
+  }
+}

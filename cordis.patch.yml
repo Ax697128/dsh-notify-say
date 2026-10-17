@@ -1,0 +1,37 @@
+# dsh-notify-desktop bundle：回合完成 / 审批请求 的 Toast + 语音提醒。
+# 语义沿用旧 dsh-notify-done；config 键说明见本包 CARD.md。
+# 依据：官方模板 templates/decoration/cordis.patch.yml 的 `- insert` 方言
+# （references/host-plugin.md「Manifest」节：同 id 覆盖时替换完整 config）。
+- insert:
+    - id: notify-desktop
+      name: dsh-notify-desktop
+      config:
+        notifyOnComplete: true      # turn/end reason.kind=completed
+        notifyOnError: true         # reason.kind=error（不同文案 + 系统蜂鸣）
+        notifyOnBlocked: true       # reason.kind=blocked（不同文案 + 系统蜂鸣）
+        notifyOnAborted: false      # aborted / max-tokens / interrupted / forked（默认静默）
+        notifyOnApproval: true      # approval/request + approval/asked
+        notifyOnQuestion: true      # 提问工具（ask_user_question / exit_plan_mode）→ question 语句池
+        voice: true                 # 语音开关（false 时 -NoSound，仅 Toast）
+        voiceMode: fixed            # fixed=固定 voiceName | random=每次随机
+        voiceName: zundamon-normal  # sounds/voice-lines/<voiceName>.wav
+        volume: 100                 # 0-100；MCI setaudio（2026-09-29 用户要求调大，拉满至上限）
+        debounceSeconds: 60         # 完成播报去抖（按会话）
+        approvalDebounceSeconds: 15 # 连串审批去抖（同会话同工具）
+        subagents: false            # true 时子代理会话也提醒
+        idleGate: true              # 空闲门：子代理/后台任务仍在跑时不播「完成」，全部结束后播一次
+        idleGateTimeoutSeconds: 600 # 空闲门兜底：挂起超过此时长仍播报（防子任务卡死致永不播报）
+        # ── v0.4.16：语音包音量增益 ─────────────────────────────────────────
+        # 本包语音包峰值中位仅 40.4%（247 个文件全量实测），而 MCI 的音量
+        # 上限只等于原始幅度 1.0 倍、无法超过 —— 所以 voice: volume 拉满
+        # 仍然偏轻。这里做数字增益补上，ps1 会按峰值自动限幅到 95%，不会破音。
+        # 嫌吵可降到 1.0（原样）；欲更响可升到 3.0~4.0。
+        voiceGain: 2.0
+        # 自定义音频是否也标准化（默认关：那是用户的素材，可能特意做得轻/响）
+        # normalizeCustomAudio: false
+        # ── v0.4.3：开发期自热重载（当前**关闭**）─────────────────────────
+        # 2026-10-17 实测该机制**不可靠**：它报成功，但只替换了部分模块
+        # （config-store.js 换了、index.js 没换），导致"半新半旧"，
+        # 排查时极具误导性。修好之前不要开启 —— 改代码就老实重启。
+        # 详见 lib/dev-reload.js 与本包 交接备忘 §5.1。
+        devReload: false
