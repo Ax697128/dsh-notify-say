@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  dsh-notify-desktop 配置命令行（v0.4.0 的「第 4 层」运行时覆盖）。
+  dsh-notify-say 配置命令行（v0.4.0 的「第 4 层」运行时覆盖）。
 
 .DESCRIPTION
   ## 为什么有它
@@ -11,7 +11,7 @@
     1. 远程办公/听不见声音，只想一条命令静音；
     2. 不想为改一个音量去重启宿主。
 
-  本脚本读写 `$DSH_HOME\storages\dsh-notify-desktop\config.json`
+  本脚本读写 `$DSH_HOME\storages\dsh-notify-say\config.json`
   （**本插件唯一拥有的持久文件**，不碰 cordis.patch.yml、不碰凭据、不碰别的插件）。
   插件每次播报前会重读它，故**改完立即生效，无需重启**。
 
@@ -120,19 +120,12 @@ $notifyPs1 = Join-Path $pluginRoot 'dsh-notify.ps1'
 
 function Get-DshHome {
   $h = $env:DSH_HOME
-  if (-not $h) {
-    # 没有环境变量时的兜底：优先按 DSH 的默认安装位置找，找不到就报错退出。
-    @(
-      (Join-Path $env:LOCALAPPDATA 'Programs\DeepSeek Harness'),
-      'C:\Program Files\DeepSeek Harness',
-      'D:\Program Files (x86)\DSH'
-    ) | ForEach-Object { if (-not $h -and (Test-Path $_)) { $h = $_ } }
-  }
+  if (-not $h) { $h = 'D:\Program Files (x86)\DSH' }   # 本机默认，仅作兜底
   return $h.TrimEnd('\', '/')
 }
 
 $dshHome = Get-DshHome
-$configDir = Join-Path $dshHome 'storages\dsh-notify-desktop'
+$configDir = Join-Path $dshHome 'storages\dsh-notify-say'
 $configPath = Join-Path $configDir 'config.json'
 
 # ── 提醒类别 → 配置键映射 ───────────────────────────────────────────────────
@@ -208,7 +201,7 @@ function Write-ConfigDoc([hashtable]$values) {
 
 # ── -Show：显示生效值与来源 ─────────────────────────────────────────────────
 function Show-Effective {
-  Write-Host "=== dsh-notify-desktop 配置 ===" -ForegroundColor Cyan
+  Write-Host "=== dsh-notify-say 配置 ===" -ForegroundColor Cyan
   Write-Host ("  DSH_HOME   : {0}" -f $dshHome)
   Write-Host ("  CLI 覆盖层 : {0}" -f $configPath)
 

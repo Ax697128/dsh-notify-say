@@ -1,10 +1,10 @@
-# dsh-notify-desktop bundle：回合完成 / 审批请求 的 Toast + 语音提醒。
+# dsh-notify-say bundle：回合完成 / 审批请求 的 Toast + 语音提醒。
 # 语义沿用旧 dsh-notify-done；config 键说明见本包 CARD.md。
 # 依据：官方模板 templates/decoration/cordis.patch.yml 的 `- insert` 方言
 # （references/host-plugin.md「Manifest」节：同 id 覆盖时替换完整 config）。
 - insert:
-    - id: notify-desktop
-      name: dsh-notify-desktop
+    - id: notify-say
+      name: dsh-notify-say
       config:
         notifyOnComplete: true      # turn/end reason.kind=completed
         notifyOnError: true         # reason.kind=error（不同文案 + 系统蜂鸣）

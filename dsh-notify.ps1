@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  dsh-notify-desktop 自带提醒脚本：弹 Windows Toast（+ 可选语音），由 host 插件 spawn 调起。
+  dsh-notify-say 自带提醒脚本：弹 Windows Toast（+ 可选语音），由 host 插件 spawn 调起。
   裁剪自旧 tools\dsh-notify.ps1（dsh-notify-done@1.1.0），适配官方 Desktop 0.1.7-rc.2。
 
 .DESCRIPTION
@@ -13,7 +13,7 @@
   - 兜底链：语句池 → master-voice.wav → sounds\*.wav 随机 → 系统蜂鸣（双轮三连音 + Asterisk）。
     fail/chime 例外：不进 done 池与不播 master-voice，直接到系统蜂鸣（避免播成"完成"）。
   - 无外部配置文件/静默文件：开关全部由插件 config（cordis.patch.yml 行内）经参数传入。
-  - 日志：best-effort 写 %TEMP%\dsh-notify-desktop\notify.log，失败不影响弹通知。
+  - 日志：best-effort 写 %TEMP%\dsh-notify-say\notify.log，失败不影响弹通知。
 
 .PARAMETER Title   通知标题（默认 "DSH 任务提醒"）
 .PARAMETER Body    通知正文（默认 "任务可能已完成，回来看看？"）
@@ -73,7 +73,7 @@ $voiceDir = Join-Path $SoundDir 'voice-lines'
 # 数字增益工具（v0.4.16）。找不到就跳过增益，绝不影响播放。
 $gainLib = Join-Path $PSScriptRoot 'lib\wav-gain.ps1'
 if (Test-Path -LiteralPath $gainLib) {
-  try { . $gainLib } catch { Write-Host ('[dsh-notify-desktop] 加载增益模块失败: ' + $_.Exception.Message) -ForegroundColor Yellow }
+  try { . $gainLib } catch { Write-Host ('[dsh-notify-say] 加载增益模块失败: ' + $_.Exception.Message) -ForegroundColor Yellow }
 }
 
 # ── 音量：-Volume 0-100 → MCI setaudio（volume*10）；越界/-1 跟随系统 ──────────
@@ -160,13 +160,13 @@ function Set-FallbackToneByKind {
 if ($CustomFile) {
   if (-not (Test-Path -LiteralPath $CustomFile -PathType Leaf)) {
     Set-FallbackToneByKind
-    Write-Host ("[dsh-notify-desktop] 自定义音频不存在，改用系统提示音: " + $CustomFile) -ForegroundColor Yellow
+    Write-Host ("[dsh-notify-say] 自定义音频不存在，改用系统提示音: " + $CustomFile) -ForegroundColor Yellow
   } else {
     $cfInfo = Get-Item -LiteralPath $CustomFile
     if ($cfInfo.Length -gt $MaxCustomBytes) {
       Set-FallbackToneByKind
       $mb = [math]::Round($cfInfo.Length / 1MB, 1)
-      Write-Host ("[dsh-notify-desktop] 自定义音频过大（" + $mb + " MB），改用系统提示音") -ForegroundColor Yellow
+      Write-Host ("[dsh-notify-say] 自定义音频过大（" + $mb + " MB），改用系统提示音") -ForegroundColor Yellow
     } else {
       $picked = $cfInfo.FullName
     }
@@ -231,7 +231,7 @@ public static class DshNotifyMci {
 # 日志：best-effort 落 %TEMP%（不写插件包/profile 目录，避免污染安装物）
 $logFile = ''
 try {
-  $logDir = Join-Path ([System.IO.Path]::GetTempPath()) 'dsh-notify-desktop'
+  $logDir = Join-Path ([System.IO.Path]::GetTempPath()) 'dsh-notify-say'
   if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
   $logFile = Join-Path $logDir 'notify.log'
   # 审查建议采纳：容量护栏——超过 512KB 整文件重建（best-effort 诊断日志，不做轮转）
@@ -324,7 +324,7 @@ function global:Play-VoiceLine {
       $gi = Get-Item -LiteralPath $script:playFile -ErrorAction Stop
       if ($gi.Length -gt $MaxCustomBytes) {
         $mbG = [math]::Round($gi.Length / 1MB, 1)
-        Write-Host ("[dsh-notify-desktop] 自定义音频过大（" + $mbG + " MB），改用系统提示音") -ForegroundColor Yellow
+        Write-Host ("[dsh-notify-say] 自定义音频过大（" + $mbG + " MB），改用系统提示音") -ForegroundColor Yellow
         $guardOk = $false
       }
     } catch { $guardOk = $false }
@@ -341,7 +341,7 @@ function global:Play-VoiceLine {
             $lenMs = 0
             if ([int]::TryParse($lenBuf.ToString().Trim(), [ref]$lenMs) -and $lenMs -gt ($script:maxCustomSeconds * 1000)) {
               $secG = [math]::Round($lenMs / 1000, 1)
-              Write-Host ("[dsh-notify-desktop] 自定义音频过长（" + $secG + " 秒），改用系统提示音") -ForegroundColor Yellow
+              Write-Host ("[dsh-notify-say] 自定义音频过长（" + $secG + " 秒），改用系统提示音") -ForegroundColor Yellow
               $guardOk = $false
             }
           }
@@ -390,7 +390,7 @@ function global:Play-VoiceLine {
         $fx = Get-Item -LiteralPath $gainTmp
         # ⚠️ 不要用跨行的 `-f` 格式化串：PowerShell 5.1 在 Write-Host (...) 里
         # 解析失败，报"缺少右括号"（本项目已踩过三次）。先算变量再拼最稳。
-        $msg = '[dsh-notify-desktop] 增益 x' + $g.AppliedGain + '（峰值 ' + $g.PeakBefore + '% -> ' + $g.PeakAfter + '%）'
+        $msg = '[dsh-notify-say] 增益 x' + $g.AppliedGain + '（峰值 ' + $g.PeakBefore + '% -> ' + $g.PeakAfter + '%）'
         Write-Host $msg -ForegroundColor DarkGray
       } else {
         # 不支持的格式 / 本来就够响 / 出错 —— 都用原文件，绝不因此静音
@@ -429,15 +429,15 @@ if ($Preview) {
   if (-not $NoSound) { Play-VoiceLine }
   $soundTag = if ($NoSound) { '（静音）' } elseif ($script:lastSound) { " + 音效 $script:lastSound" } else { ' + 兜底提示音' }
   if ($logFile) { try { Add-Content -Path $logFile -Value ("{0} [preview] [{1}] -Voice {2} pick={3}{4}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Kind, $Voice, $pickedName, $soundTag) -Encoding utf8 } catch { } }
-  Write-Host ("[dsh-notify-desktop] OK 试听 [$Kind] pick=" + $pickedName + $soundTag) -ForegroundColor Green
+  Write-Host ("[dsh-notify-say] OK 试听 [$Kind] pick=" + $pickedName + $soundTag) -ForegroundColor Green
 } elseif ($shown) {
   if (-not $NoSound) { Play-VoiceLine }
   $soundTag = if ($NoSound) { '（静音）' } elseif ($script:lastSound) { " + 音效 $script:lastSound" } else { ' + 兜底提示音' }
   if ($logFile) { try { Add-Content -Path $logFile -Value ("{0} [toast] [{1}] {2} - {3} pick={4}{5}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Kind, $Title, $Body, $pickedName, $soundTag) -Encoding utf8 } catch { } }
-  Write-Host ("[dsh-notify-desktop] OK Toast [$Kind] pick=" + $pickedName + $soundTag) -ForegroundColor Green
+  Write-Host ("[dsh-notify-say] OK Toast [$Kind] pick=" + $pickedName + $soundTag) -ForegroundColor Green
 } else {
   if (-not $NoSound) { Play-VoiceLine }
   $soundTag = if ($NoSound) { '（静音）' } elseif ($script:lastSound) { " + 音效 $script:lastSound" } else { ' + 兜底提示音' }
   if ($logFile) { try { Add-Content -Path $logFile -Value ("{0} [FALLBACK] [{1}] {2} - {3} pick={4}{5}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Kind, $Title, $Body, $pickedName, $soundTag) -Encoding utf8 } catch { } }
-  Write-Host ("[dsh-notify-desktop] (Toast 不可用，走兜底) [$Kind] pick=" + $pickedName + $soundTag) -ForegroundColor Yellow
+  Write-Host ("[dsh-notify-say] (Toast 不可用，走兜底) [$Kind] pick=" + $pickedName + $soundTag) -ForegroundColor Yellow
 }

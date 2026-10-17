@@ -53,7 +53,7 @@
 把本仓库目录链接进 profile：
 
 ```
-<DSH 安装目录>\profiles\desktop\package.json
+D:\Program Files (x86)\DSH\profiles\desktop\package.json
   dependencies 里加:  "dsh-notify-desktop": "link:<本仓库路径>"
   dsh.profile.bundles 里加:  "dsh-notify-desktop"
 ```
@@ -171,19 +171,6 @@ npm run test:route    # 需要 --import loader 的 6 条接线测试
 
 ---
 
-## 许可与致谢
+## 许可
 
-代码以 **MIT** 许可发布（见 `LICENSE`）。
-
-随包分发的**语音与音效素材不适用 MIT**，各自归属原项目，详见
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
-
-### 致谢
-
-- **[VOICEVOX](https://voicevox.hiroshiba.jp/)** —— 全部语音由它本地合成。
-  核心包音色：**VOICEVOX:ずんだもん**。各角色音色有独立利用规约，
-  再分发语音时请自行确认。
-- **[Mixkit](https://mixkit.co/free-sound-effects/)** —— 10 个梗音效素材，
-  Mixkit License（免费含商用、无需署名、不可转卖音频本身）。
-
-没有这些免费与开源的资源，这个插件只能发出单调的系统提示音。
+MIT。语音文件由本地 VOICEVOX 合成，各音色有其自身使用条款，详见 `LICENSE` 末尾的第三方声明。

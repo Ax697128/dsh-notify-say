@@ -62,7 +62,7 @@ $ErrorActionPreference = 'Stop'
 function Write-Log([string]$msg) {
   if ($Preview) { return }
   try {
-    $dir = Join-Path $env:TEMP 'dsh-notify-desktop'
+    $dir = Join-Path $env:TEMP 'dsh-notify-say'
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $line = ('{0} [tts] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg)
     Add-Content -LiteralPath (Join-Path $dir 'notify.log') -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
