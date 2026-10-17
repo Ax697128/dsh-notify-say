@@ -120,7 +120,14 @@ $notifyPs1 = Join-Path $pluginRoot 'dsh-notify.ps1'
 
 function Get-DshHome {
   $h = $env:DSH_HOME
-  if (-not $h) { $h = 'D:\Program Files (x86)\DSH' }   # 本机默认，仅作兜底
+  if (-not $h) {
+    # 没有环境变量时的兜底：优先按 DSH 的默认安装位置找，找不到就报错退出。
+    @(
+      (Join-Path $env:LOCALAPPDATA 'Programs\DeepSeek Harness'),
+      'C:\Program Files\DeepSeek Harness',
+      'D:\Program Files (x86)\DSH'
+    ) | ForEach-Object { if (-not $h -and (Test-Path $_)) { $h = $_ } }
+  }
   return $h.TrimEnd('\', '/')
 }
 

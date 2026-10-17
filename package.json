@@ -28,7 +28,8 @@
                   "cordis.patch.yml",
                   "tools",
                   "README.md",
-                  "LICENSE"
+                  "LICENSE",
+                "THIRD-PARTY-NOTICES.md"
               ],
     "keywords":  [
                      "dsh",

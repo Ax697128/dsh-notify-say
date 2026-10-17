@@ -19,14 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party notice — bundled voice lines
-
-The WAV files under `sounds/` were synthesized locally with
-VOICEVOX (https://voicevox.hiroshiba.jp/), which is free for personal and
-commercial use under its own terms. Each VOICEVOX character voice has its
-own usage guidelines; when redistributing a voice pack, check the
-guidelines of the specific character voice you ship. This plugin does not
-redistribute the VOICEVOX engine itself.
