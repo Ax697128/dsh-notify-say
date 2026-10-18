@@ -116,3 +116,46 @@ test('C31: notify-config.ps1 不指向仓库里不存在的脚本', async () => 
       + '这是"照着做就失败"的文档 bug');
   }
 });
+
+// ── C32: 语音包清单不得在挂载时自动加载（防死循环）────────────────────────
+test('C32: loadPacks 不在 useEffect 里自动触发', () => {
+  const src = client;
+
+  // 找所有 useEffect 块
+  const effects = [...src.matchAll(/React\.useEffect\(function[\s\S]*?\n {6}\}, \[[^\]]*\]\)/g)];
+  assert.ok(effects.length > 0, '应能找到 useEffect');
+
+  for (const m of effects) {
+    assert.doesNotMatch(m[0], /loadPacks\s*\(\s*\)/,
+      'useEffect 里不得调用 loadPacks —— set 会触发重渲染，'
+      + '同步执行的 effect 会形成「加载→set→重渲染→加载」死循环'
+      + '（2026-10-18 实测把 4GB 堆打满，client-bundle 测试直接 OOM）');
+  }
+
+  // 反面：loadPacks 必须存在（供按钮调用）
+  assert.match(src, /function loadPacks\s*\(/, '应保留 loadPacks 供按钮调用');
+  assert.match(src, /onClick: function \(\) \{ loadPacks\(\) \}/,
+    '应有按钮显式触发 loadPacks');
+});
+
+// ── C33: 语音包 UI 必须给出授权提示 ────────────────────────────────────
+test('C33: 语音包区域含 VOICEVOX 授权提示（不能默默装）', () => {
+  const src = client;
+  assert.match(src, /voicepacks\/index/, '应有列清单的调用');
+  assert.match(src, /voicepacks\/install/, '应有安装调用');
+  assert.match(src, /voicepacks\/uninstall/, '应有卸载调用');
+  assert.match(src, /VOICEVOX 生成/, 'UI 必须说明这些语音由 VOICEVOX 生成');
+  assert.match(src, /TERMS\.md/, '必须提示下载后会附条款文件');
+});
+
+// ── C34: 前端不得自己拼下载 URL（SSRF 防护）────────────────────────────
+test('C34: 前端只传 key，不构造下载地址', () => {
+  const src = client;
+  const at = src.indexOf("apiUrl('voicepacks/install')");
+  assert.ok(at >= 0, '应能找到安装调用');
+  const seg = src.slice(at, at + 400);
+  assert.match(seg, /JSON\.stringify\(\{ key: key \}\)/,
+    '安装请求体应只含 key');
+  assert.doesNotMatch(seg, /https?:\/\//,
+    '前端不得出现下载 URL —— 地址必须由 host 从固定源算（否则就是 SSRF）');
+});

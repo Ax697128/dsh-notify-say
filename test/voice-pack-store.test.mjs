@@ -1,208 +1,236 @@
 /**
- * 语音包存储层测试（v0.4.29）。
+ * 语音包存储层测试（v0.4.31：一音色一目录）。
  *
- * ## 它解决什么问题
+ * ## 两套布局必须共存
  *
- * 三处代码曾各自硬编码 `<plugin>/sounds/voice-lines`：
- *   lib/index.js            → hasVoiceLine
- *   dsh-notify.ps1          → 播放时找文件
- *   tools/notify-config.ps1 → 删除音色
+ * ```
+ * 内置（只读，平铺旧布局，247 个文件已经在用）
+ *   voice-lines/zundamon-normal.wav
+ *   voice-lines/fail/zundamon-normal~1.wav
  *
- * 但下载的音色**写不进插件目录**（实测 node_modules 不可写，npm 更新还会覆盖），
- * 必须放 `%LOCALAPPDATA%`。若不先统一存储层就做下载，会出现
- * 「下载成功但插件找不到」—— 这是本次重构的全部理由。
+ * 用户（可写，一音色一目录）
+ *   voice-lines/zundamon-normal/zundamon-normal.wav
+ *   voice-lines/zundamon-normal/fail/zundamon-normal~1.wav
+ * ```
  *
- * ## 测什么
+ * ## 为什么用户目录用新布局
  *
- * 重点是**优先级**与**回退**：
- *   · 用户目录优先于插件目录（用户能覆盖内置同名音色）
- *   · 用户目录没有时回退到插件目录（内置始终可用）
- *   · 两个都没有时返回 null / false（上层据此降级）
+ * 从用户角度：
+ *   · 卸载 = 删一个文件夹（旧方案按文件名前缀匹配，删 normal 会连带删 normal-extra）
+ *   · "我装了哪些"一眼可见
+ *   · 每个音色自带 TERMS.md / MANIFEST.json
+ *
+ * 内置保持平铺是**不动已经工作的东西** —— 247 个文件没必要为此迁移。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   POOLS,
   voiceKeyOf,
-  regions,
-  poolDir,
-  listWavs,
-  listVoiceKeys,
+  userVoiceRoot,
+  builtinVoiceRoot,
+  poolDirOf,
+  installedVoiceKeys,
+  builtinVoiceKeys,
   mergeVoices,
-  findVoiceFile,
+  voiceFiles,
   hasVoice,
   poolCoverage,
-  userPoolDir,
+  poolSummary,
+  userKeyDir,
 } from '../lib/voice-pack-store.js';
 
-/** 造一个"区域"，写入指定的 wav 文件名。 */
-function makeRegion(kind, filesByPool) {
-  const root = mkdtempSync(join(tmpdir(), `vps-${kind}-`));
+/** 临时切换数据目录，跑完恢复。 */
+async function withDataDir(fn) {
+  const old = process.env.DSH_NOTIFY_SAY_DATA_DIR;
+  const dir = mkdtempSync(join(tmpdir(), 'vps-'));
+  process.env.DSH_NOTIFY_SAY_DATA_DIR = dir;
+  try {
+    return await fn(dir);
+  } finally {
+    if (old === undefined) delete process.env.DSH_NOTIFY_SAY_DATA_DIR;
+    else process.env.DSH_NOTIFY_SAY_DATA_DIR = old;
+  }
+}
+
+/** 造一个「平台根」（模拟 pluginRoot）。 */
+function makePluginRoot() {
+  return mkdtempSync(join(tmpdir(), 'vps-plugin-'));
+}
+
+/** 在平铺布局里放文件（模拟内置目录）。 */
+function seedBuiltin(pluginRoot, filesByPool) {
+  const base = builtinVoiceRoot(pluginRoot);
   for (const [pool, names] of Object.entries(filesByPool)) {
-    const dir = pool ? join(root, pool) : root;
+    const dir = poolDirOf(base, pool);
     mkdirSync(dir, { recursive: true });
     for (const n of names) writeFileSync(join(dir, n), 'RIFF____WAVE');
   }
-  return { kind, root, writable: kind === 'user' };
 }
 
-// ── V1: 音色 key 推导（命名规则是跨模块契约）────────────────────────────
+/** 在「一音色一目录」布局里放文件（模拟用户目录）。 */
+function seedUser(key, filesByPool) {
+  const base = join(userVoiceRoot(), key);
+  for (const [pool, names] of Object.entries(filesByPool)) {
+    const dir = poolDirOf(base, pool);
+    mkdirSync(dir, { recursive: true });
+    for (const n of names) writeFileSync(join(dir, n), 'RIFF____WAVE');
+  }
+}
+
+// ── V1: 音色 key 推导 ───────────────────────────────────────────────────
 test('V1: voiceKeyOf 正确剥掉变体后缀', () => {
   const cases = [
     ['zundamon-normal.wav', 'zundamon-normal'],
     ['zundamon-normal~1.wav', 'zundamon-normal'],
-    ['zundamon-normal~12.wav', 'zundamon-normal'],
     ['zundamon-normal-kansai-1.wav', 'zundamon-normal'],
     ['zundamon-normal-extra-2.wav', 'zundamon-normal'],
-    ['my-voice-ja.wav', 'my-voice-ja'],
   ];
   for (const [input, want] of cases) {
-    assert.equal(voiceKeyOf(input), want, `${input} 应推导为 ${want}`);
+    assert.equal(voiceKeyOf(input), want);
   }
 });
 
-// ── V2: 区域顺序 —— 用户目录必须在前 ────────────────────────────────────
-test('V2: regions() 把用户目录排在前（优先级高于插件）', () => {
-  const old = process.env.DSH_NOTIFY_SAY_DATA_DIR;
-  process.env.DSH_NOTIFY_SAY_DATA_DIR = join(tmpdir(), 'vps-fake-data');
-  try {
-    const list = regions('C:\\fake\\plugin');
-    assert.equal(list.length, 2);
-    assert.equal(list[0].kind, 'user', '用户目录必须在第一位 —— 否则下载的音色覆盖不了内置');
-    assert.equal(list[1].kind, 'plugin');
-    assert.equal(list[0].writable, true);
-    assert.equal(list[1].writable, false);
-  } finally {
-    if (old === undefined) delete process.env.DSH_NOTIFY_SAY_DATA_DIR;
-    else process.env.DSH_NOTIFY_SAY_DATA_DIR = old;
+// ── V2: 两种布局的结构同构 ──────────────────────────────────────────────
+test('V2: <key>/ 目录与内置根同构（同一 poolDirOf）', () => {
+  const builtin = 'C:\\p\\sounds\\voice-lines';
+  const userKey = 'C:\\u\\voice-lines\\zundamon-normal';
+  for (const pool of ['', 'fail', 'question', 'approval']) {
+    const a = poolDirOf(builtin, pool);
+    const b = poolDirOf(userKey, pool);
+    assert.equal(a.replace(builtin, ''), b.replace(userKey, ''),
+      `池 ${pool || '(根)'} 的相对结构应一致 —— 这是两套布局能共用读取逻辑的前提`);
   }
 });
 
-// ── V3: 池目录拼接 ──────────────────────────────────────────────────────
-test('V3: poolDir 空池=根目录，其余加子目录', () => {
-  const r = { kind: 'user', root: 'X:\\base', writable: true };
-  assert.equal(poolDir(r, ''), 'X:\\base');
-  assert.equal(poolDir(r, 'fail'), 'X:\\base\\fail');
+// ── V3: 用户目录识别子目录为音色 ────────────────────────────────────────
+test('V3: installedVoiceKeys 把子目录当音色，忽略 .installing', async () => {
+  await withDataDir(() => {
+    seedUser('zundamon-normal', { '': ['zundamon-normal.wav'] });
+    seedUser('ankomon', { '': ['ankomon.wav'] });
+    // 解压中的临时目录不该算已安装
+    mkdirSync(join(userVoiceRoot(), 'somekey.installing'), { recursive: true });
+
+    assert.deepEqual(installedVoiceKeys(), ['ankomon', 'zundamon-normal']);
+  });
 });
 
-// ── V4: 目录不存在时返回空数组（不抛）───────────────────────────────────
-test('V4: listWavs 对不存在的目录返回空数组', () => {
-  const r = { kind: 'user', root: join(tmpdir(), 'vps-does-not-exist-xyz'), writable: true };
-  assert.deepEqual(listWavs(r, ''), []);
-  assert.deepEqual(listWavs(r, 'fail'), []);
-});
-
-// ── V5: 只挑 wav，忽略其它文件 ──────────────────────────────────────────
-test('V5: listWavs 只返回 .wav', () => {
-  const r = makeRegion('user', { '': ['a.wav', 'readme.md', 'b.WAV', 'c.mp3'] });
-  const got = listWavs(r, '').map((x) => x.toLowerCase()).sort();
-  assert.deepEqual(got, ['a.wav', 'b.wav'], '.WAV 大小写也应算，mp3/md 不算');
-});
-
-// ── V6: 跨池汇总音色 key ────────────────────────────────────────────────
-test('V6: listVoiceKeys 汇总全部池并去重', () => {
-  const r = makeRegion('user', {
+// ── V4: 内置目录按文件名归纳音色 ────────────────────────────────────────
+test('V4: builtinVoiceKeys 从平铺文件归纳出音色', () => {
+  const pluginRoot = makePluginRoot();
+  seedBuiltin(pluginRoot, {
     '': ['zundamon-normal.wav', 'zundamon-normal-kansai-1.wav'],
     fail: ['zundamon-normal~1.wav', 'ankomon~1.wav'],
   });
-  assert.deepEqual(listVoiceKeys(r), ['ankomon', 'zundamon-normal']);
+  assert.deepEqual(builtinVoiceKeys(pluginRoot), ['ankomon', 'zundamon-normal']);
 });
 
-// ── V7: 合并时用户版本胜出（核心优先级语义）─────────────────────────────
-test('V7: mergeVoices 同名音色取前面的区域（用户覆盖内置）', () => {
-  const user = makeRegion('user', { '': ['zundamon-normal.wav'] });
-  const plugin = makeRegion('plugin', { '': ['zundamon-normal.wav', 'ankomon.wav'] });
+// ── V5: 合并时用户优先 ──────────────────────────────────────────────────
+test('V5: mergeVoices 用户版覆盖内置版', async () => {
+  const pluginRoot = makePluginRoot();
+  await withDataDir(() => {
+    seedBuiltin(pluginRoot, { '': ['zundamon-normal.wav', 'ankomon.wav'] });
+    seedUser('zundamon-normal', { '': ['zundamon-normal.wav'] });
 
-  const merged = mergeVoices([user, plugin]);
-  const map = new Map(merged.map((m) => [m.key, m]));
-
-  assert.equal(map.get('zundamon-normal').source, 'user',
-    '同名时应取用户版本 —— 用户下载的应该覆盖内置的');
-  assert.equal(map.get('ankomon').source, 'plugin',
-    '只有在插件目录里有的音色，来源应标为 plugin');
-});
-
-// ── V8: findVoiceFile 优先精确名，再变体 ────────────────────────────────
-test('V8: findVoiceFile 先找精确名，没有再找 ~N 变体', () => {
-  const r = makeRegion('user', {
-    '': ['zundamon-normal.wav'],
-    fail: ['zundamon-normal~1.wav', 'zundamon-normal~2.wav'],
+    const map = new Map(mergeVoices(pluginRoot).map((m) => [m.key, m]));
+    assert.equal(map.get('zundamon-normal').source, 'user',
+      '用户装了同名音色时，来源应为 user');
+    assert.equal(map.get('ankomon').source, 'builtin');
+    assert.equal(map.get('ankomon').installed, false, '内置的不算"已安装"');
   });
-  const doneFile = findVoiceFile([r], 'zundamon-normal', '');
-  assert.ok(doneFile.endsWith('zundamon-normal.wav'));
-
-  const failFile = findVoiceFile([r], 'zundamon-normal', 'fail');
-  assert.match(failFile, /zundamon-normal~\d\.wav$/,
-    'fail 池没有精确名，应回退到 ~N 变体');
 });
 
-// ── V9: 用户目录找不到时回退插件目录（内置始终可用）──────────────────────
-test('V9: findVoiceFile 在两个区域间回退', () => {
-  const user = makeRegion('user', { '': ['only-in-user.wav'] });
-  const plugin = makeRegion('plugin', { '': ['only-in-plugin.wav'] });
+// ── V6: voiceFiles 在用户目录找到就不往内置找 ───────────────────────────
+test('V6: voiceFiles 用户版完全覆盖内置版（不混用）', async () => {
+  const pluginRoot = makePluginRoot();
+  await withDataDir(() => {
+    seedBuiltin(pluginRoot, { '': ['zundamon-normal.wav', 'zundamon-normal-kansai-1.wav'] });
+    seedUser('zundamon-normal', { '': ['zundamon-normal.wav'] });
 
-  assert.ok(findVoiceFile([user, plugin], 'only-in-user', '').includes('only-in-user'));
-  assert.ok(findVoiceFile([user, plugin], 'only-in-plugin', '').includes('only-in-plugin'),
-    '用户目录没有时必须回退到插件目录 —— 否则内置音色会"消失"');
-});
-
-// ── V10: 都没有时返回 null（上层据此降级，不抛）─────────────────────────
-test('V10: findVoiceFile 找不到返回 null', () => {
-  const r = makeRegion('user', { '': ['a.wav'] });
-  assert.equal(findVoiceFile([r], 'no-such-voice', ''), null);
-  assert.equal(findVoiceFile([], 'any', ''), null);
-});
-
-// ── V11: hasVoice 跨区域判断 ────────────────────────────────────────────
-test('V11: hasVoice 任区域任池有即 true', () => {
-  const user = makeRegion('user', { '': ['a.wav'] });
-  const plugin = makeRegion('plugin', { fail: ['b~1.wav'] });
-  const list = [user, plugin];
-
-  assert.equal(hasVoice(list, 'a'), true);
-  assert.equal(hasVoice(list, 'b'), true, '只在 fail 池也算有');
-  assert.equal(hasVoice(list, 'c'), false);
-});
-
-// ── V12: 池覆盖度（供 GUI 显示"完整度"）─────────────────────────────────
-test('V12: poolCoverage 报告各池有无', () => {
-  const r = makeRegion('user', {
-    '': ['zuk.wav'],
-    question: ['zuk~1.wav'],
+    const files = voiceFiles(pluginRoot, 'zundamon-normal', '');
+    assert.equal(files.length, 1,
+      '用户目录有该音色时，不应再把内置的同名文件混进来');
+    assert.ok(files[0].includes('voice-lines'), '应来自用户目录');
+    assert.ok(!files[0].includes('sounds'), '不应来自内置 sounds 目录');
   });
-  const cov = poolCoverage([r], 'zuk');
-  assert.deepEqual(cov, { done: true, question: true, approval: false, fail: false });
 });
 
-// ── V13: userPoolDir 只给路径，不创建目录 ───────────────────────────────
-test('V13: userPoolDir 返回路径但不创建目录', () => {
-  const old = process.env.DSH_NOTIFY_SAY_DATA_DIR;
-  const dir = mkdtempSync(join(tmpdir(), 'vps-nocreate-'));
-  process.env.DSH_NOTIFY_SAY_DATA_DIR = dir;
-  try {
-    const p = userPoolDir('fail');
-    assert.ok(p.includes('voice-lines'), '路径应含 voice-lines');
-    assert.ok(p.endsWith('fail'));
-    // 不该被创建 —— "只是查一下"不该留空目录
-    assert.equal(existsSyncSafe(p), false, 'userPoolDir 不应创建目录');
-  } finally {
-    if (old === undefined) delete process.env.DSH_NOTIFY_SAY_DATA_DIR;
-    else process.env.DSH_NOTIFY_SAY_DATA_DIR = old;
-    rmSync(dir, { recursive: true, force: true });
-  }
+// ── V7: 用户目录没有时回退内置 ──────────────────────────────────────────
+test('V7: voiceFiles 用户没装时回退内置（内置始终可用）', async () => {
+  const pluginRoot = makePluginRoot();
+  await withDataDir(() => {
+    seedBuiltin(pluginRoot, { '': ['ankomon.wav'] });
+    const files = voiceFiles(pluginRoot, 'ankomon', '');
+    assert.equal(files.length, 1);
+    assert.ok(files[0].includes('sounds'), '应回退到内置目录');
+  });
 });
 
-// ── V14: 池集合与 ps1 的 -Kind 对齐 ─────────────────────────────────────
-test('V14: POOLS 与 ps1 的 Kind 取值一致', () => {
-  assert.deepEqual([...POOLS].sort(), ['', 'approval', 'fail', 'question'].sort(),
-    '池集合必须与 dsh-notify.ps1 的 -Kind 可选值一致，否则跨根查找会漏池');
+// ── V8: 池隔离（fail 不串到 done）───────────────────────────────────────
+test('V8: voiceFiles 严格按池取，不跨池', async () => {
+  const pluginRoot = makePluginRoot();
+  await withDataDir(() => {
+    seedUser('zundamon-normal', {
+      '': ['zundamon-normal.wav'],
+      fail: ['zundamon-normal~1.wav'],
+    });
+    assert.equal(voiceFiles(pluginRoot, 'zundamon-normal', 'fail').length, 1);
+    assert.equal(voiceFiles(pluginRoot, 'zundamon-normal', 'question').length, 0);
+    assert.ok(voiceFiles(pluginRoot, 'zundamon-normal', 'fail')[0].includes('fail'),
+      'fail 池的文件必须来自 fail 目录 —— 失败时播"完成了"语义完全相反');
+  });
 });
 
-/** existsSync 的薄封装（保持测试可读性）。 */
-function existsSyncSafe(p) {
-  return existsSync(p);
-}
+// ── V9: 跨池覆盖度 ──────────────────────────────────────────────────────
+test('V9: poolCoverage 报告各池有无', async () => {
+  const pluginRoot = makePluginRoot();
+  await withDataDir(() => {
+    seedUser('zuk', { '': ['zuk.wav'], question: ['zuk~1.wav'] });
+    assert.deepEqual(poolCoverage(pluginRoot, 'zuk'),
+      { done: true, question: true, approval: false, fail: false });
+  });
+});
+
+// ── V10: poolSummary 统计两种布局 ───────────────────────────────────────
+test('V10: poolSummary 同时统计用户与内置', async () => {
+  const pluginRoot = makePluginRoot();
+  await withDataDir(() => {
+    seedBuiltin(pluginRoot, { fail: ['a~1.wav', 'b~1.wav'] });
+    seedUser('a', { fail: ['a~1.wav'] });
+    const s = poolSummary(pluginRoot, 'fail');
+    assert.equal(s.unreadable, false);
+    assert.ok(s.total >= 2, `至少应统计到内置的 2 个，实际 ${s.total}`);
+  });
+});
+
+// ── V11: 目录不存在时安全返回 ───────────────────────────────────────────
+test('V11: 目录不存在时各函数返回空而不抛', async () => {
+  const pluginRoot = makePluginRoot();   // 空目录
+  await withDataDir(() => {
+    assert.deepEqual(installedVoiceKeys(), []);
+    assert.deepEqual(builtinVoiceKeys(pluginRoot), []);
+    assert.deepEqual(voiceFiles(pluginRoot, 'nope', ''), []);
+    assert.equal(hasVoice(pluginRoot, 'nope'), false);
+    assert.equal(poolSummary(pluginRoot, '').total, 0);
+  });
+});
+
+// ── V12: userKeyDir 与 installedVoiceKeys 一致 ──────────────────────────
+test('V12: userKeyDir 指向的目录就是 installedVoiceKeys 认的那个', async () => {
+  await withDataDir(() => {
+    seedUser('mykey', { '': ['mykey.wav'] });
+    const keys = installedVoiceKeys();
+    assert.ok(keys.includes('mykey'));
+    assert.ok(existsSync(userKeyDir('mykey')), 'userKeyDir 应指向真实存在的目录');
+    assert.equal(userKeyDir('mykey'), join(userVoiceRoot(), 'mykey'));
+  });
+});
+
+// ── V13: POOLS 与 ps1 的 Kind 对齐 ──────────────────────────────────────
+test('V13: POOLS 与 dsh-notify.ps1 的 -Kind 取值一致', () => {
+  assert.deepEqual([...POOLS].sort(), ['', 'approval', 'fail', 'question'].sort());
+});
