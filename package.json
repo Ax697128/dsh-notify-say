@@ -1,6 +1,6 @@
 {
     "name":  "dsh-notify-say",
-    "version":  "0.4.24",
+    "version":  "0.4.25",
     "description":  "Desktop notifications for DSH Desktop that actually speak: Windows TTS out of the box (zero download), VOICEVOX voice packs optional, a selectable system-sound fallback, and an idle gate that waits for running subagents before saying the turn is done. Includes a settings-page GUI (sound source, per-event overrides, jump-back-to-session, cooldowns) and a self hot-reload for development.",
     "license":  "MIT",
     "type":  "module",
@@ -29,7 +29,9 @@
                   "tools",
                   "README.md",
                   "LICENSE",
-                  "THIRD-PARTY-NOTICES.md"
+                  "THIRD-PARTY-NOTICES.md",
+                  "test",
+                  "docs"
               ],
     "keywords":  [
                      "dsh",
@@ -46,6 +48,13 @@
     "engines":  {
                     "node":  "\u003e=20",
                     "dsh":  "\u003e=0.1.7-rc.2"
+                },
+    "scripts":  {
+                    "test":  "node --test",
+                    "test:all":  "node --test \u0026\u0026 node --import ./test/route-loader-register.mjs --test test/fail-route.test.mjs test/audio-wiring.test.mjs",
+                    "test:route":  "node --import ./test/route-loader-register.mjs --test test/fail-route.test.mjs",
+                    "test:audio-wire":  "node --import ./test/route-loader-register.mjs --test test/audio-wiring.test.mjs",
+                    "check:client":  "node ./test/client-bundle.test.mjs"
                 },
     "dsh":  {
                 "manifestVersion":  1,

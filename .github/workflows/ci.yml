@@ -1,0 +1,196 @@
+name: CI
+
+# 为什么这条工作流存在
+#
+# 2026-10-18 外部审阅指出：公开仓库跑不了 README 里写的 `npm run test:all`
+# —— 因为测试没公开、package.json 也没有 scripts。
+# 结果是"本地修好了但 GitHub 没更新"这类问题没有任何自动化兜底。
+#
+# 这条工作流做四件事：
+#   1. 跑全部单元测试（纯 Node，不需要 DSH 宿主）
+#   2. 检查 PowerShell 脚本语法与 BOM（本插件重度依赖 ps1）
+#   3. 检查打包完整性（关键文件是否都在）
+#   4. 检查版本一致性（package.json vs 源码注释）
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一分支的新提交取消旧的运行，省额度
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 单元测试（Node ${{ matrix.node }}）
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      # 只测本插件实际声明支持的版本（engines 字段）
+      matrix:
+        node: ['20', '22', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 安装依赖
+        run: |
+          if (Test-Path package-lock.json) { npm ci } else { npm install --no-audit --no-fund }
+
+      - name: 单元测试（纯逻辑）
+        # 依赖真实 DSH 宿主的用例会自动 skip（skip 不算通过）。
+        # 这里不设 DSH_CORDIS_ENTRY，所以宿主相关用例全部 skip。
+        run: npm test
+
+      - name: 单元测试（route 注入）
+        run: npm run test:route
+
+      - name: 单元测试（audio wiring）
+        run: npm run test:audio-wire
+
+  powershell:
+    name: PowerShell 脚本检查
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 语法检查（所有 .ps1）
+        shell: pwsh
+        run: |
+          $failed = 0
+          $files = Get-ChildItem -Recurse -File -Filter '*.ps1' |
+            Where-Object { $_.FullName -notmatch '\\node_modules\\' }
+          foreach ($f in $files) {
+            $err = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$err) | Out-Null
+            if ($err -and $err.Count -gt 0) {
+              Write-Host "✗ $($f.Name): $($err[0].Message)" -ForegroundColor Red
+              $failed++
+            } else {
+              Write-Host "✓ $($f.Name)" -ForegroundColor Green
+            }
+          }
+          if ($failed -gt 0) {
+            Write-Host "`n$failed 个脚本有语法错误" -ForegroundColor Red
+            exit 1
+          }
+
+      - name: UTF-8 BOM 检查
+        # 本插件的 ps1 含中文输出。**没有 BOM 时 PowerShell 5.1 会按 ANSI 解码**，
+        # 中文变乱码（实测过）。所以强制要求 BOM。
+        shell: pwsh
+        run: |
+          $bad = @()
+          $files = Get-ChildItem -Recurse -File -Filter '*.ps1' |
+            Where-Object { $_.FullName -notmatch '\\node_modules\\' }
+          foreach ($f in $files) {
+            $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+            $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+            if (-not $hasBom) { $bad += $f.Name }
+          }
+          if ($bad.Count -gt 0) {
+            Write-Host "以下脚本缺少 UTF-8 BOM（中文会乱码）：" -ForegroundColor Red
+            $bad | ForEach-Object { Write-Host "  - $_" }
+            exit 1
+          }
+          Write-Host "所有 ps1 都有 BOM ✓" -ForegroundColor Green
+
+  package:
+    name: 打包完整性
+    runs-on: windows-latest
+    needs: [test]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 关键文件齐全
+        shell: pwsh
+        run: |
+          # 这些文件缺了会直接影响功能或合规，必须显式检查
+          $required = @(
+            'package.json',
+            'LICENSE',
+            'README.md',
+            'THIRD-PARTY-NOTICES.md',   # 合规：第三方素材声明
+            'lib/index.js',
+            'lib/client.js',
+            'lib/config-store.js',
+            'lib/audio-source.js',
+            'dsh-notify.ps1',
+            'tts-speak.ps1',
+            'cordis.patch.yml'
+          )
+          $missing = @()
+          foreach ($f in $required) {
+            if (-not (Test-Path -LiteralPath $f)) { $missing += $f }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "缺少关键文件：" -ForegroundColor Red
+            $missing | ForEach-Object { Write-Host "  - $_" }
+            exit 1
+          }
+          Write-Host "关键文件齐全（$($required.Count) 项）✓" -ForegroundColor Green
+
+      - name: npm 打包内容检查
+        shell: pwsh
+        run: |
+          $out = npm pack --dry-run 2>&1 | Out-String
+          Write-Host $out
+
+          # 声明必须进包 —— 2026-10-18 实测发现 files 白名单漏了它，
+          # 导致用户拿到的包里没有任何第三方声明。
+          if ($out -notmatch 'THIRD-PARTY-NOTICES') {
+            Write-Host "`n✗ THIRD-PARTY-NOTICES.md 没进 npm 包" -ForegroundColor Red
+            exit 1
+          }
+
+          # 被禁音色的**音频**不得进包（许可原因，见 docs/audio-audit/README.md）。
+          #
+          # 注意判据要精确到音频文件：
+          #   · 审核记录（docs/audio-audit/snapshots/mochiko.txt）**应该**提到这些名字，
+          #     那是"为什么禁"的证据
+          #   · 测试文件也会提到它们（用来断言禁得住）
+          # 所以只查 .wav/.mp3 等音频扩展名 —— 查文件名会大面积假阳性。
+          $banned = @('mochiko', 'kasukabe-tsumugi', 'yurei-chan', 'my-voice')
+          $audioLines = ($out -split "`n") | Where-Object { $_ -match '\.(wav|mp3|m4a|ogg|flac)\s*$' }
+          foreach ($b in $banned) {
+            $hit = $audioLines | Where-Object { $_ -match ('/' + [regex]::Escape($b)) }
+            if ($hit) {
+              Write-Host "`n✗ 被禁音色的音频进了包：" -ForegroundColor Red
+              $hit | ForEach-Object { Write-Host "  $_" }
+              exit 1
+            }
+          }
+          Write-Host "被禁音色的音频未进包 ✓" -ForegroundColor Green
+          if ($out -match '\.mp3') {
+            Write-Host "`n✗ 包内出现 .mp3（Mixkit 已移除，不得回来）" -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "`n打包内容检查通过 ✓" -ForegroundColor Green
+
+  version:
+    name: 版本一致性
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: package.json 与源码注释版本一致
+        run: node --test test/version-consistency.test.mjs

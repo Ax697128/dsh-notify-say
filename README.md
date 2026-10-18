@@ -1,4 +1,4 @@
-# dsh-notify-desktop
+# dsh-notify-say
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai) Desktop 用的通知插件：**任务跑完会说话**。
 
@@ -46,7 +46,7 @@
 
 ### 方式一：插件页（推荐）
 
-在 DSH 的 **设置 → 插件** 里搜索 `dsh-notify-desktop` 安装。
+在 DSH 的 **设置 → 插件** 里搜索 `dsh-notify-say` 安装。
 
 ### 方式二：手工 link（本地开发）
 
@@ -54,8 +54,8 @@
 
 ```
 D:\Program Files (x86)\DSH\profiles\desktop\package.json
-  dependencies 里加:  "dsh-notify-desktop": "link:<本仓库路径>"
-  dsh.profile.bundles 里加:  "dsh-notify-desktop"
+  dependencies 里加:  "dsh-notify-say": "link:<本仓库路径>"
+  dsh.profile.bundles 里加:  "dsh-notify-say"
 ```
 
 然后在该 profile 目录执行 `pnpm install`，重启 DSH。
@@ -159,16 +159,56 @@ sounds/voice-lines/fail/<key>~1.wav       出错
 
 ## 开发
 
+### 跑测试
+
 ```powershell
-npm run test:all      # 101 条测试
-npm test              # 主套件（route 测试会 skip）
-npm run test:route    # 需要 --import loader 的 6 条接线测试
+npm test              # 主套件（纯 Node，不需要 DSH 宿主）
+npm run test:all      # 全部（含 route 注入的两组）
+npm run test:route    # 需要 --import loader 的接线测试
+npm run test:audio-wire
 ```
 
-测试分九组：空闲门判定（20）、事件接线（12）、会话跳转降级（11）、配置持久化（11）、
-语音包（10）、失败语音（10）、Config schema（8）、失败路由（6）、真实 Cordis（5）。
+**274 条测试。** 绝大多数是纯逻辑测试，克隆仓库后 `npm test` 即可跑。
 
-全部通过才算提交就绪；关键断言做过**变异测试**（故意改坏代码确认测试变红）。
+少数用例需要真实的 DSH 宿主（用于验证 Cordis 上下文行为）。
+找不到宿主时它们会**自动 skip** —— 注意 skip 不等于通过。
+指定宿主路径：
+
+```powershell
+$env:DSH_CORDIS_ENTRY = "<DSH 安装目录>\.runtime\node_modules\@deepseek-ai\cordis\lib\index.js"
+npm test
+```
+
+### 测试分层
+
+| 层次 | 内容 |
+|---|---|
+| 单元 | 音源选择、空闲门、配置校验、TTS 文案、http-guard 判定 |
+| 集成 | 真实 HTTP 服务器 + 真实 handler，覆盖请求/响应全链路 |
+| 实机 | 真实 Cordis 上下文（需宿主，无则 skip） |
+| 发布 | 构建发布包并断言被禁音色/第三方素材未进包 |
+
+集成测试（`test/http-integration.test.mjs`）是 2026-10-18 加的，起因是
+一次真实回归：给 `/consume` 加了"写操作必须 JSON"的防护，但客户端还在用
+GET —— 单元测试全绿，功能却断了。集成测试会读取客户端源码里的真实调用形状，
+所以两边一旦不同步就会变红。
+
+### CI
+
+`.github/workflows/ci.yml` 在每次 push / PR 时跑：
+
+- 单元测试（Node 20 / 22 / 24）
+- PowerShell 语法与 UTF-8 BOM 检查
+- 关键文件齐全 + npm 打包内容检查（含"被禁音色不得进包"）
+- 版本一致性
+
+### 变异测试
+
+关键断言都做过变异验证（故意改坏代码确认测试变红）。例如：
+
+- 把 `consume` 的客户端调用改回 GET → E0/E1 变红
+- 把 `head` 的前缀剥离去掉 → E3 变红
+- 把 `verifyReload` 改成永远放行 → S2/S6/R8/R8b 变红
 
 ---
 
