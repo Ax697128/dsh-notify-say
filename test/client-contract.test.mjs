@@ -330,3 +330,59 @@ test('C42: 点遮罩外部可取消，点卡片内部不取消', () => {
   assert.match(seg, /cancelTerms\(\)/,
     '点外部应取消');
 });
+// ── C43: set() 里的状态字段必须来自它自己的参数 ─────────────────────────
+test('C43: 状态字段引用必须用 set() 自己的参数，不得用外层变量', () => {
+  // ⚠️ 2026-10-18 真实 bug（外部审阅发现）：
+  //
+  //   pickCustomFile().then(function (p) {      // p 是文件路径字符串
+  //     set(function (prev) {                   // 状态参数叫 prev
+  //       return { ..., packs: p.packs, ... }   // ← 用错的变量！
+  //     })
+  //   })
+  //
+  // `p` 是路径字符串（取消时是空串），`p.packs` 恒为 undefined →
+  // 用户取消选择自定义音频后，**已加载的语音包状态被清掉**。
+  //
+  // 这类"状态字段遗漏/用错变量"已经出现 4 次（advOpen / packs /
+  // termsAck / 这次的 p.packs）。所以用静态扫描固定住，而不是靠人记得。
+  const lines = client.split(/\r?\n/);
+  const FIELDS = ['loaded', 'values', 'advOpen', 'packs', 'termsAck', 'termsPending', 'busy', 'msg', 'err'];
+
+  // 允许引用非状态参数的对象：它们是**接口响应**，恰好也有同名字段。
+  //   r    —— saveConfig 的返回值（含 values）
+  //   doc  —— fetchVoicePacks 的返回值（含 packs）
+  const ALLOW = new Set(['r', 'doc']);
+
+  const bad = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/set\(function \((\w+)\) \{/);
+    if (!m) continue;
+    const param = m[1];
+
+    // 取该 set 的块
+    let depth = 0, started = false, end = i;
+    for (let j = i; j < Math.min(i + 30, lines.length); j++) {
+      for (const ch of lines[j]) {
+        if (ch === '{') { depth++; started = true; }
+        else if (ch === '}') { depth--; }
+      }
+      if (started && depth === 0) { end = j; break; }
+    }
+    const block = lines.slice(i, end + 1).join('\n');
+
+    for (const f of FIELDS) {
+      const re = new RegExp(`([A-Za-z_$][\\w$]*)\\.${f}\\b`, 'g');
+      let mm;
+      while ((mm = re.exec(block)) !== null) {
+        const ident = mm[1];
+        if (ident === param || ALLOW.has(ident)) continue;
+        bad.push(`L${i + 1}: 参数=${param} 但用了 ${mm[0]}`);
+      }
+    }
+  }
+
+  assert.deepEqual(bad, [],
+    '这些 set() 引用了不属于它自己状态参数的字段 —— '
+    + '典型后果是把已加载的状态清成 undefined（语音包列表消失等）。\n'
+    + bad.join('\n'));
+});

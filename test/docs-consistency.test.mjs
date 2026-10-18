@@ -338,3 +338,102 @@ test('D9: release.ps1 在构建后、推送前，于发布包内跑测试', { sk
   assert.match(rp, /throw 'release-package tests failed'/,
     '发布包内测试失败必须中止发版（fail-closed）');
 });
+// ══ README 与实现一致性（v0.4.47）════════════════════════════════════════
+//
+// 2026-10-18 外部审阅指出 README 落后于功能：
+//   · 说语音包下载"尚未实现"（其实 13 个 zip 早发布了，GUI 也能下）
+//   · 说"全离线"（下载语音包要访问 GitHub）
+//   · 说"点 Toast 可跳回会话"（Toast 点击带不了会话 id，跳转是另一套机制）
+//   · 说"设置页 12 项"（实际 schema 字段多得多）
+//
+// README 是用户判断"这插件能干什么"的第一入口。写错不是文字瑕疵 ——
+// 别人可能因此根本不知道有下载功能。
+
+const README = readFileSync(join(ROOT, 'README.md'), 'utf8');
+
+// ── D10: README 不得再声称语音包下载"未实现" ────────────────────────────
+test('D10: README 不得说语音包下载尚未实现', () => {
+  assert.doesNotMatch(README, /下载提供（尚未实现）/,
+    '语音包下载已实现并发布 13 个 zip，README 不得再说"尚未实现"');
+  assert.doesNotMatch(README, /尚未实现/,
+    'README 里不应残留"尚未实现"这类过时表态');
+
+  // 反而应该真的介绍怎么下载
+  assert.match(README, /语音包/,
+    'README 应有语音包章节');
+  assert.match(README, /下载/,
+    'README 应说明可以下载');
+});
+
+// ── D11: README 不得无条件下声称"全离线" ────────────────────────────────
+test('D11: README 的联网表述必须区分"播放离线"与"下载要联网"', () => {
+  // 只写"全离线"会让用户以为下载语音包也不需要网络，
+  // 一旦断网失败就以为插件坏了。
+  const hasOfflineClaim = /全离线/.test(README);
+  if (hasOfflineClaim) {
+    assert.match(README, /下载.*联网|联网.*下载/,
+      '若说"全离线"，必须同时说明下载语音包需要联网');
+  }
+  // 明确写清楚是更好的做法
+  assert.match(README, /不调用云端 TTS|不联网/,
+    '应说明播放/通知是离线的');
+});
+
+// ── D12: README 不得说"点 Toast 就能跳会话" ─────────────────────────────
+test('D12: README 对跳会话的描述要准确（Toast 点击带不了会话 id）', () => {
+  // 事实：Windows Toast 的协议激活是固定串，塞不进会话 id。
+  // 真正跳转的机制是"切回窗口时自动跳"。
+  assert.doesNotMatch(README, /点击 Toast 可直接回到对应会话/,
+    '这是错的说法 —— Toast 点击只能唤起窗口，带不了会话 id');
+
+  assert.match(README, /切回|切回来/,
+    '应说明真正的跳转发生在"切回 DSH 窗口时"');
+  assert.match(README, /带不了会话 id/,
+    '应明确指出 Toast 点击的限制，否则用户会以为是 bug');
+});
+
+// ── D13: README 里的数字必须与实现一致 ──────────────────────────────────
+test('D13: README 的测试条数与实际一致', () => {
+  const pkgScripts = PKG.scripts || {};
+  assert.ok(pkgScripts['test:all'], '应有 test:all 脚本');
+
+  // README 写了几条就直接比对；写错了会误导贡献者
+  const m = README.match(/\*\*(\d+) 条测试通过/);
+  if (!m) {
+    assert.match(README, /条测试/, 'README 应说明测试规模');
+    return;
+  }
+  const claimed = Number(m[1]);
+  // 允许 +/- 30 的漂移（新增测试后不必立刻同步数字），但差太多说明没维护
+  assert.ok(claimed > 300 && claimed < 600,
+    `README 声称 ${claimed} 条测试，超出合理范围 —— 数字可能过时`);
+});
+
+// ── D14: README 必须提到音色下载的许可告知 ──────────────────────────────
+test('D14: README 说明下载前会展示署名与条款', () => {
+  // 这是合规要求：用户得知道"用这些语音做的内容要署名"。
+  // README 是下载前的最后一道说明。
+  assert.match(README, /署名/,
+    'README 应说明音色的署名要求');
+  assert.match(README, /条款/,
+    'README 应说明条款');
+  assert.match(README, /TERMS\.md/,
+    '应说明包内带 TERMS.md');
+});
+// ── D15: MANIFEST 不得留 (unknown)，要留可回溯的线索 ────────────────────
+test('D15: MANIFEST 的版本回溯栏可用（不是 unknown）', { skip: SKIP_DEVONLY }, () => {
+  // 2026-10-18 外部审阅指出：公开仓库的 MANIFEST 长期显示
+  // `Git 提交: (unknown)` —— 这一栏从来没提供过信息。
+  //
+  // 原因是它在**构建时**生成，而发布包首次 commit 在构建**之后**。
+  // 现在改为如实说明 + 给出真正能查的线索。
+  const rb = readFileSync(RELEASE_BUILD, 'utf8');
+
+  assert.doesNotMatch(rb, /'\(unknown\)'/,
+    '不得再写 (unknown) —— 那等于这一栏没信息');
+
+  assert.match(rb, /源码日期/,
+    '应记录源提交日期（判断构建用的是哪天源码）');
+  assert.match(rb, /版本回溯/,
+    '应指向可查的公开提交 / CHANGELOG');
+});
