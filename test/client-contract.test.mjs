@@ -191,7 +191,48 @@ test('C36: apply 成功后重新套用 values 时不能丢 packs', () => {
   assert.match(seg, /packs: p\.packs/, '同一分支必须保留 packs');
 });
 // ── C37: 所有 set 返回必须带 termsAck / termsPending ────────────────────
-test('C37: 每个 set 的状态重建都保留 termsAck 与 termsPending', () => {
+test('C37: termsAck/termsPending 必须在顶层，不能在 packs 内层', () => {
+  // ⚠️ 2026-10-18 第三轮审阅指出：这条原来只检查"附近有没有 termsAck 字符串"，
+  // 所以我用脚本批量补字段时把它插进了 `packs: { ... }` 内层，测试仍是绿的。
+  //
+  // 后果：刷新语音包列表后顶层确认状态被清掉 → 用户被反复要求确认同一音色。
+  //
+  // 现在改成**按缩进判断真实层级**：状态对象的属性缩进应该与 `packs:` 同级，
+  // 而不是比它更深。
+  const lines = client.split(/\r?\n/);
+  const problems = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!/termsAck:|termsPending:/.test(line)) continue;
+    if (/^\s*\/\//.test(line)) continue;   // 注释不算
+
+    const indent = line.length - line.trimStart().length;
+
+    // 往上找最近的 `packs:` 行，看当前缩进是否比它大
+    let packsIndent = -1;
+    for (let j = i - 1; j >= Math.max(0, i - 12); j--) {
+      if (/packs:\s*(\{|p\.packs|\{)/.test(lines[j])) {
+        packsIndent = lines[j].length - lines[j].trimStart().length;
+        break;
+      }
+      if (/^\s*\}\s*,?\s*$/.test(lines[j])) break;   // 遇到闭合就停
+    }
+
+    // 若在 packs 块里（缩进比 packs 深），就是错位
+    if (packsIndent >= 0 && indent > packsIndent) {
+      problems.push({ line: i + 1, indent, packsIndent });
+    }
+  }
+
+  assert.deepEqual(problems, [],
+    'termsAck/termsPending 被放进了 packs 子对象内层 —— '
+    + '刷新列表后顶层状态会被清掉，用户会被反复要求确认条款。\n'
+    + JSON.stringify(problems));
+});
+
+// ── C37b: 每个状态重建都必须真的带上这两个字段 ─────────────────────────
+test('C37b: 每个 set 的状态重建都保留 termsAck 与 termsPending', () => {
   const lines = client.split(/\r?\n/);
   const bad = [];
 
@@ -206,7 +247,7 @@ test('C37: 每个 set 的状态重建都保留 termsAck 与 termsPending', () =>
 
   assert.deepEqual(bad, [],
     '这些 set 没带 termsAck/termsPending —— 组件状态是整体对象，漏字段等于重置。\n'
-    + '这是同一个坑的第三次（前两次是 advOpen、packs），所以用全量扫描而不是逐个手查。\n'
+    + '（这是同一个坑的第三次：advOpen、packs、termsAck 各一次）\n'
     + '行号：' + bad.join(', '));
 });
 
@@ -236,4 +277,56 @@ test('C39: 确认面板展示署名 + 官方条款链接', () => {
   const seg = client.slice(at, at + 1200);
   assert.match(seg, /termsUrl/,
     '面板必须真的用到 termsUrl —— 否则用户没处读条款就要点确认');
+});
+// ── C40: 条款确认必须是居中覆盖弹窗，不能是列表下方的内联面板 ──────────
+test('C40: 条款确认是覆盖式弹窗（固定在视口中心，不随滚动）', () => {
+  // 2026-10-18 用户实测反馈：v0.4.40 把确认面板放在语音包列表**下面**，
+  // 点列表上面几个音色时面板在屏幕外看不见 ——
+  // 用户以为已经在下载，实际在等一个他没看见的确认。
+  //
+  // 这不只是"位置靠下"，而是**不阻断**：后面所有按钮照常可点。
+  assert.match(client, /function renderTermsModal/,
+    '应有独立的弹窗渲染函数');
+
+  const at = client.indexOf('function renderTermsModal');
+  const seg = client.slice(at, at + 1200);
+
+  assert.match(seg, /position:\s*'fixed'/,
+    '弹窗必须用 position:fixed 才能固定在视口中心 —— '
+    + '相对定位会跟着设置卡片滚动，重演"看不见"的问题');
+  assert.match(seg, /justifyContent:\s*'center'/,
+    '应水平居中');
+  assert.match(seg, /alignItems:\s*'center'/,
+    '应垂直居中');
+  assert.match(seg, /zIndex/,
+    '需要 zIndex 才能盖在其他内容之上');
+
+  // 遮罩要能吃掉点击（阻断背后交互）
+  assert.match(seg, /background:\s*'rgba\(0,0,0/,
+    '应有半透明遮罩');
+});
+
+// ── C41: 弹窗作为根的兄弟节点，不能塞进 rows ────────────────────────────
+test('C41: 弹窗挂在根上而不是 rows 里', () => {
+  // 塞进 rows 会跟着滚动（位置不固定），这是设计上的硬要求。
+  const at = client.indexOf("h('div', { key: 'root-box', style: S.box }, rows)");
+  assert.ok(at > 0, '根渲染应把 rows 包进 root-box');
+
+  // 弹窗应在根层 push，而不是 rows.push
+  assert.match(client, /rootKids\.push\(renderTermsModal/,
+    '弹窗应 push 到 rootKids（根的兄弟层），而不是 rows');
+
+  assert.doesNotMatch(client, /rows\.push\(renderTermsModal/,
+    '不能把弹窗塞进 rows —— 那会跟着滚动');
+});
+
+// ── C42: 点遮罩可关闭（不能把用户困住）──────────────────────────────────
+test('C42: 点遮罩外部可取消，点卡片内部不取消', () => {
+  const at = client.indexOf('function renderTermsModal');
+  const seg = client.slice(at, at + 1200);
+
+  assert.match(seg, /e\.target === e\.currentTarget/,
+    '应区分"点遮罩"与"点卡片内部" —— 否则点卡片任意位置都会关掉弹窗');
+  assert.match(seg, /cancelTerms\(\)/,
+    '点外部应取消');
 });

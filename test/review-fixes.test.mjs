@@ -96,13 +96,28 @@ test('V2: install / uninstall / diagnostics 都算写操作', () => {
 
 // ── V3: ZIP 炸弹防护必须在解压前 + 解压中 ───────────────────────────────
 test('V3: 解压前检查声明大小，解压时带 maxOutputLength', () => {
+  // ⚠️ 这条原本断言的是 `entry.size` —— **字段名错了**。
+  //
+  // 解析器返回的字段叫 `uncompSize`，而 zip 头里没有 `size`。
+  // 于是 `Number.isFinite(undefined)` 为 false，那道"解压前检查"从来没执行过，
+  // 而这条测试却因为"源码里出现了 entry.size 字样"而变绿。
+  //
+  // 2026-10-18 第三轮审阅的原话：
+  //   「防护代码存在、测试也通过，但代码与真实 ZIP 数据结构并未对齐。」
+  //
+  // 现在断言正确字段，并交给 Y2（行为测试）验证真的会拒绝。
   const at = DL.indexOf('inflateRawSync(raw');
   assert.ok(at > 0, '应能找到解压调用');
-  const seg = DL.slice(Math.max(0, at - 900), at + 300);
+  // 去掉注释再断言，否则注释里提到 entry.size 会误报。
+  const stripped = DL.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const at2 = stripped.indexOf('inflateRawSync(raw');
+  const seg = stripped.slice(Math.max(0, at2 - 2000), at2 + 300);
 
-  assert.match(seg, /entry\.size/,
-    '必须在解压**前**检查 ZIP 头里声明的解压大小 —— '
-    + '否则炸弹包会先把内存吃满，再被"解压后累计"检查发现（已经晚了）');
+  assert.match(seg, /entry\.uncompSize/,
+    '必须在解压前检查 `uncompSize`（zip 头里声明的解压大小）—— '
+    + '写成 entry.size 的话该字段不存在，检查永远不执行');
+  assert.doesNotMatch(seg, /entry\.size\b/,
+    '不得出现 entry.size —— 这个字段在 ZIP 条目上不存在');
   assert.match(seg, /maxOutputLength/,
     '解压时必须带 maxOutputLength —— 声明大小可能撒谎，要靠 zlib 自己兜底');
 });
