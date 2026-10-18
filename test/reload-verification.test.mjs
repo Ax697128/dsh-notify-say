@@ -28,7 +28,20 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, statSy
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { registerHooks } from 'node:module';
+// ⚠️ 不能静态 import registerHooks —— 它是 Node 22.15+ 才有的导出，
+// Node 20 上会让整个测试文件加载失败（CI 首跑抓到）。
+// 改为运行时按需取，取不到就跳过相关断言。
+let _registerHooks;
+async function getRegisterHooks() {
+  if (_registerHooks !== undefined) return _registerHooks;
+  try {
+    const mod = await import('node:module');
+    _registerHooks = typeof mod.registerHooks === 'function' ? mod.registerHooks : null;
+  } catch {
+    _registerHooks = null;
+  }
+  return _registerHooks;
+}
 
 import { computeFingerprint } from '../lib/dev-reload.js';
 
