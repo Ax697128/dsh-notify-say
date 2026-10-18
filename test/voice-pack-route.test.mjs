@@ -182,3 +182,49 @@ test('R7: 安装索引里没有的音色返回 404', async () => {
       `应是 404 或 502，实际 ${res.statusCode}`);
   });
 });
+
+// ── R8: 索引里的 terms → termsUrl（前端读的是这个字段名）─────────────────
+test('R8: 路由把 packs.json 的 terms 映射成前端要的 termsUrl', async () => {
+  // ⚠️ 用户评审时看到界面显示「条款链接待补」，要求核实是不是发布缺字段。
+  //
+  // 核实结论：真实 packs.json 的 13 个音色**都有** terms，
+  // 但字段名是 `terms`，而前端读的是 `termsUrl` ——
+  // 转名这一步在 voice-pack-route.js 里（`termsUrl: p.terms`）。
+  //
+  // 这步一旦被删，界面会对**所有**音色显示「条款链接待补」。
+  // 用真实请求 + 打桩 fetch 把这条跨文件契约钉住。
+  await withDataDir(async () => {
+    const realFetch = globalThis.fetch;
+    const FAKE_TERMS = 'https://example.invalid/voice-terms';
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        packs: [{
+          key: 'zundamon-normal',
+          name: 'ずんだもん（ノーマル）',
+          file: 'zundamon-normal.zip',
+          bytes: 100,
+          sha256: 'a'.repeat(64),
+          wavs: 1,
+          credit: 'VOICEVOX:ずんだもん',
+          terms: FAKE_TERMS,
+        }],
+      }),
+    });
+    try {
+      const route = createVoicePackRoute({ pluginRoot: '.', logger: { info() {}, warn() {} } });
+      const res = await call(route, 'GET', 'index');
+      assert.equal(res.statusCode, 200);
+      const doc = res.json();
+      assert.equal(doc.indexOk, true, '索引应可用（fetch 已打桩）');
+      const p = (doc.packs || []).find((x) => x.key === 'zundamon-normal');
+      assert.ok(p, '应返回该音色');
+      assert.equal(p.termsUrl, FAKE_TERMS,
+        'packs.json 里叫 terms，前端读的是 termsUrl —— 名字不对会让界面显示「条款链接待补」');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
