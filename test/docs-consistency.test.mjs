@@ -493,3 +493,62 @@ test('D17: README 如实说明检查更新也会联网', () => {
   assert.match(README, /不影响通知|照常工作/,
     '应说明联网失败不影响通知与语音');
 });
+// ── D18: 所有 .ps1 必须带 UTF-8 BOM ─────────────────────────────────────
+test('D18: PowerShell 脚本必须有 UTF-8 BOM（含维护者工具）', () => {
+  // ⚠️ 2026-10-18 我自己踩的坑：
+  //
+  // 用 Node 或 .NET 编辑 .ps1 时，`writeFileSync(..., 'utf8')` /
+  // `WriteAllText(..., UTF8Encoding($false))` 会**丢掉 BOM**。
+  // 而 PowerShell 5.1 在没有 BOM 时按系统 ANSI（中文系统是 GBK）解码，
+  // 于是文件里的中文变成乱码 → 语法错误 → 构建直接崩：
+  //
+  //   Missing closing ')' in expression.
+  //   master-voice.wav锛坉one 鍏滃簳锛?
+  //
+  // CI 里有 BOM 检查，但它只看**发布包里的** ps1 ——
+  // `tools/release-build.ps1` 与 `tools/release.ps1` 是维护者工具、不进发布包，
+  // 所以它们的 BOM 一直没人查，这次才崩在本地。
+  const bad = [];
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name.startsWith('.tmp')) continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!e.name.toLowerCase().endsWith('.ps1')) continue;
+      try {
+        const buf = readFileSync(p);
+        const hasBom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
+        if (!hasBom) bad.push(p.slice(ROOT.length + 1));
+      } catch { /* 读不到就跳过 */ }
+    }
+  };
+  walk(ROOT);
+
+  assert.deepEqual(bad, [],
+    '这些 .ps1 没有 UTF-8 BOM —— PowerShell 5.1 会把中文读成乱码然后语法报错：\n'
+    + bad.join('\n'));
+});
+
+// ── D19: .gitattributes 必须随包分发 ────────────────────────────────────
+test('D19: 发布包带 .gitattributes（否则 Windows 上 checkout 会改成 CRLF）', () => {
+  // 2026-10-18 实测：CI 跑在 windows-latest，公开仓库当时没有 .gitattributes，
+  // `actions/checkout` 按 autocrlf=true 把 .ps1 转成 CRLF，
+  // 而开发机是 LF → D16 在 CI 全红（同样的提交，字节不同）。
+  assert.ok(existsSync(join(ROOT, '.gitattributes')),
+    '插件目录应有自己的 .gitattributes，并随包分发');
+
+  const ga = readFileSync(join(ROOT, '.gitattributes'), 'utf8');
+  assert.match(ga, /\*\.ps1\s+text eol=lf/,
+    '.gitattributes 应把 .ps1 定为 LF');
+  assert.match(ga, /\*\.wav\s+binary/,
+    '音频必须标 binary，否则换行转换会损坏文件');
+
+  // 若这是开发目录，还要确认 release-build 把它列进白名单
+  if (hasReleaseBuild) {
+    const rb = readFileSync(RELEASE_BUILD, 'utf8');
+    assert.match(rb, /'\.gitattributes'/,
+      'release-build 的 includeFiles 必须含 .gitattributes，否则不会进发布包');
+  }
+});

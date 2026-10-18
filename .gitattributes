@@ -1,0 +1,39 @@
+# 行尾与二进制约定（随发布包分发）
+#
+# ## 为什么这个文件必须进发布包
+#
+# 2026-10-18 实测：CI 跑在 windows-latest，而公开仓库当时**没有** .gitattributes，
+# 于是 `actions/checkout` 按 Windows 默认 `core.autocrlf=true` 把 .ps1 转成了 CRLF ——
+# 而开发机上是 LF（工作区根 .gitattributes 管着）→ D16 测试在 CI 全红。
+#
+# 也就是说：**同样的提交，Windows 上 clone 到的和开发机上的字节不同。**
+# 这个文件把约定随包带走，任何人 clone 都得到一致的字节。
+#
+# ## 为什么 .ps1 用 LF
+#
+# PowerShell 5.1 与 7 都能正确执行 LF 脚本（已实测：
+# 把 dsh-notify.ps1 转成 LF 后跑 `-Kind done -Preview`，正常选中并播放了音色）。
+# 统一 LF 的好处是"发布包 == GitHub 版本 == npm 版本"字节一致，
+# 任何按字节/哈希校验的地方都不会莫名其妙对不上。
+#
+# （注意：`.cmd` / `.bat` 必须 CRLF —— 但本包不含这类文件。
+#   若将来加入，务必在下面补 `*.cmd text eol=crlf`。）
+
+# 文本：统一 LF
+*.ps1    text eol=lf
+*.js     text eol=lf
+*.mjs    text eol=lf
+*.md     text eol=lf
+*.json   text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.txt    text eol=lf
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+
+# 二进制：禁止任何转换（否则音频损坏、哈希对不上）
+*.wav    binary
+*.mp3    binary
+*.zip    binary
+*.png    binary
+*.ico    binary
