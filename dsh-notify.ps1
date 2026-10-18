@@ -47,6 +47,11 @@ param(
   # v0.4.4：直接播放用户指定的音频文件（绝对路径）。
   # 有这个参数时**跳过整个选音链**——用户明确要放这个文件，不该被兜底逻辑换掉。
   [string]$CustomFile = '',
+  # v0.4.29：语音包根目录（分号/逗号分隔，前面的优先）。
+  # 不传 = 只用插件目录（向后兼容）。Node 侧会传「用户目录;插件目录」。
+  [string]$VoiceRoot = '',
+  # 用户语音包根目录（可写），仅用于诊断日志。
+  [string]$UserVoiceRoot = '',
   # v0.4.16：数字增益倍数（1.0 = 原样；2.0 = 放大一倍）。
   #
   # 为什么需要：实测本包 247 个语音包峰值中位仅 **40.4%**
@@ -68,7 +73,22 @@ $script:lastSound = ''
 $script:playFile = ''
 
 $SoundDir = Join-Path $PSScriptRoot 'sounds'
-$voiceDir = Join-Path $SoundDir 'voice-lines'
+# ── 语音包根目录（v0.4.29：多候选，前面的优先）─────────────────
+#
+# 旧实现硬编码 <插件根>\sounds\voice-lines。但下载的音色必须放用户目录
+# （插件目录不可写、且 npm 更新会覆盖），所以由 Node 侧算好候选路径传进来。
+$script:voiceRoots = @()
+if ($VoiceRoot) {
+  foreach ($p in ($VoiceRoot -split '[;,]')) {
+    $t = $p.Trim()
+    if ($t) { $script:voiceRoots += $t }
+  }
+}
+if ($script:voiceRoots.Count -eq 0) {
+  $script:voiceRoots = @(Join-Path $SoundDir 'voice-lines')
+}
+# $voiceDir 保留为“主语音目录”（第一个候选），供日志与旧单目录兜底使用
+$voiceDir = $script:voiceRoots[0]
 
 # 数字增益工具（v0.4.16）。找不到就跳过增益，绝不影响播放。
 $gainLib = Join-Path $PSScriptRoot 'lib\wav-gain.ps1'
@@ -114,8 +134,9 @@ if ($SystemSound) {
 # kind=chime：不选语句，只走系统蜂鸣。
 # done → voiceLines 根目录；question/approval/fail → voiceLines\<kind>\ 子池。
 # 命名用 ~ 作变体分隔符（音色 key 允许 [\w-]，用 - 会前缀碰撞，旧实测教训）。
-$voiceLines = $voiceDir
-if ($Kind -in 'question', 'approval', 'fail') { $voiceLines = Join-Path $voiceDir $Kind }
+# 池名（0.4.29 起跨根查找只需要池名，不拼绝对路径）
+$voicePool = ''
+if ($Kind -in 'question', 'approval', 'fail') { $voicePool = $Kind }
 
 # ⚠️ fail 池为空时的语义护栏（2026-10-17）：
 # 旧逻辑的兜底链会把"池里没选到"一路回落到 $voiceDir（= done 池）甚至 master-voice.wav
@@ -128,6 +149,32 @@ function Pick-RandomWav([string]$dir, [string]$pattern) {
   $files = @(Get-ChildItem -LiteralPath $dir -Filter $pattern -File -ErrorAction SilentlyContinue)
   if ($files.Count -eq 0) { return '' }
   return ($files | Get-Random).FullName
+}
+
+# 在**全部候选根**的指定池里随机取一个 wav。
+#
+# 语义与 Pick-RandomWav 一致，只是从“单目录”变成“跨根”（前面的根优先，但都参与）。
+# 旧函数保留：master-voice 与梗音效池仍用单目录。
+function Pick-RandomWavFromRoots([string]$Pool, [string]$Pattern) {
+  $all = @()
+  foreach ($root in $script:voiceRoots) {
+    $dir = if ($Pool) { Join-Path $root $Pool } else { $root }
+    if (-not (Test-Path -LiteralPath $dir)) { continue }
+    $files = @(Get-ChildItem -LiteralPath $dir -File -Filter $Pattern -ErrorAction SilentlyContinue)
+    foreach ($f in $files) { $all += $f }
+  }
+  if ($all.Count -eq 0) { return '' }
+  return ($all | Get-Random).FullName
+}
+
+# 在全部候选根里找某个精确文件名（前面的根优先）。
+function Find-InVoiceRootsExact([string]$Pool, [string]$FileName) {
+  foreach ($root in $script:voiceRoots) {
+    $dir = if ($Pool) { Join-Path $root $Pool } else { $root }
+    $p = Join-Path $dir $FileName
+    if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+  }
+  return ''
 }
 
 $picked = ''
@@ -185,25 +232,25 @@ if ($Kind -ne 'chime' -and -not $script:sysToneName -and -not $picked) {
   if ($Mode -eq 'random') { $wantVoice = '' }
   if ($wantVoice -and $wantVoice -notmatch '^\w[\w-]*$') { $wantVoice = '' }
   if ($wantVoice) {
-    $picked = Pick-RandomWav $voiceLines ($wantVoice + '~*.wav')
+    $picked = Pick-RandomWavFromRoots $voicePool ($wantVoice + '~*.wav')
     if (-not $picked) {
-      $pf = Join-Path $voiceLines ($wantVoice + '.wav')
-      if (Test-Path -LiteralPath $pf) { $picked = $pf }
+      $pf = Find-InVoiceRootsExact $voicePool ($wantVoice + '.wav')
+      if ($pf) { $picked = $pf }
     }
     # fail/chime 的池内兜底（2026-10-17，独立复核 I-1 提出后补）：
     # fail 池只覆盖 16 个基础音色，而 done 池有 103 个 key（含 -kansai-N / -extra-N 变体）。
     # 用户在 tools\set-voice.ps1 里切到未覆盖的 key 时，若这里直接放弃 → 失败时整句台词消失、
     # 只剩蜂鸣。语义上"换个音色说同样的道歉话"远好于"没有台词"，故在**同一子池内**退一步随机取。
     # 注意：这是**池内**回落，绝不越到 done 池（越池由下方 $noDoneFallback 拦截）。
-    if (-not $picked -and $noDoneFallback) { $picked = Pick-RandomWav $voiceLines '*.wav' }
+    if (-not $picked -and $noDoneFallback) { $picked = Pick-RandomWavFromRoots $voicePool '*.wav' }
     # done 池根目录的 <voice>.wav 只对 done 有意义；fail 池缺该音色时不该去 done 池找
     if (-not $picked -and -not $noDoneFallback) {
-      $pf = Join-Path $voiceDir ($wantVoice + '.wav')
-      if (Test-Path -LiteralPath $pf) { $picked = $pf }
+      $pf = Find-InVoiceRootsExact '' ($wantVoice + '.wav')
+      if ($pf) { $picked = $pf }
     }
   } else {
-    $picked = Pick-RandomWav $voiceLines '*.wav'
-    if (-not $picked -and -not $noDoneFallback) { $picked = Pick-RandomWav $voiceDir '*.wav' }
+    $picked = Pick-RandomWavFromRoots $voicePool '*.wav'
+    if (-not $picked -and -not $noDoneFallback) { $picked = Pick-RandomWavFromRoots '' '*.wav' }
   }
   # master-voice.wav 说的是"任務完了"，对 fail 同样语义相反 → 跳过
   if (-not $picked -and -not $noDoneFallback) {

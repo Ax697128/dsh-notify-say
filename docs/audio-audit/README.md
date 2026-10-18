@@ -55,7 +55,7 @@
 | **ankomon** | `VOICEVOX:あんこもん` | 同上 | 同上 |
 | **ameharu-hau** 雨晴はう | `VOICEVOX:雨晴はう`（角色名可选） | **禁止 R18 音声用途**；禁止未授权变声模型 | [あめはれくりにっく](https://amehau.com/rules/amehare-hau-rule.html) |
 | **goki-nuigurumi** 後鬼 | `VOICEVOX:後鬼` | 企业商用需事前确认（本项目为个人免费，不触发） | [ついなちゃん](https://xn--n8jychz0k1d.com/voice_terms/) |
-| **manbetsu-hanamaru-genki** 満別花丸 | `VOICEVOX:満別花丸` | 禁止恶意使用、冒充官方、特定政治极端宣传 | [官方](https://100hanamaru.wixsite.com/manbetsu-hanamaru/rule) |
+| **manbetsu-hanamaru-genki** 満別花丸 | `VOICEVOX:満別花丸` | 禁止恶意使用、冒充官方、特定政治极端宣传 | [官方](https://100hanamaru.wixsite.com/manbetsu-hanamaru-genki/rule) |
 | **meimei-meria** 冥鳴ひまり | `VOICEVOX:冥鳴ひまり` | 禁止损害第三方、特定思想团体 | [官方](https://www.meimeihimari.com/terms-of-use) |
 | **namiine-ritsu** 波音リツ | `VOICEVOX:波音リツ`（见下） | 权利人有要求停止公开的条款 | [カノンの落ちる城](https://www.canon-voice.com/terms/) |
 | **shirakami-kotaro** 白上虎太郎 | `VOICEVOX:白上虎太郎` | 禁止用输出训练新声音模型 | [VirVox](https://www.virvoxproject.com/voicevoxの利用規約) |
@@ -134,7 +134,7 @@ VOICEVOX 官方共 40+ 个音色。以下**可能有价值但我们没用过**�
 | 目标 | 原因 | 补救 |
 |---|---|---|
 | `mochiko` 完整正文 | `wixsite.com` 域名在本机网络不可达（ERR_CONNECTION_CLOSED） | 已有搜索摘要含禁止条款原文，且我们**已决定排除**，不影响结论 |
-| `manbetsu-hanamaru` 完整正文 | 同上（同为 wixsite） | 已有摘要含署名要求；建议后续用代理重抓 |
+| `manbetsu-hanamaru-genki` 完整正文 | 同上（同为 wixsite） | 已有摘要含署名要求；建议后续用代理重抓 |
 | `夜語トバリ` 规约正文 | 官网用 JS 动态加载，`#rules` 锚点未触发 | 身份未确认，暂不发布，暂不需要 |
 
 ## 七、当前可发布清单
@@ -142,7 +142,7 @@ VOICEVOX 官方共 40+ 个音色。以下**可能有价值但我们没用过**�
 ```
 可发布（CONDITIONAL，13 个）：
   zundamon-normal, zundamon-amama, shikoku-metang, kyushu-sora,
-  tohoku-zunko, tohoku-kiritan, ankokon, ameharu-hau,
+  tohoku-zunko, tohoku-kiritan, ankomon, ameharu-hau,
   goki-nuigurumi, manbetsu-hanamaru-genki, meimei-meria,
   namiine-ritsu, shirakami-kotaro
 

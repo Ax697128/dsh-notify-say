@@ -11,8 +11,10 @@
 #   & $env:DSHX_NODE scripts/browser.mjs --url <url> --action text
 
 $ErrorActionPreference = 'Continue'
-$browser = "C:\Users\audio\.codex\skills\browser-auto"
-$outDir = "E:\0Deepseek\tools\plugins\dsh-notify-desktop\docs\audio-audit\snapshots"
+# 浏览器自动化工具目录。默认取技能目录，可用环境变量覆盖。
+$browser = if ($env:BROWSER_AUTO_DIR) { $env:BROWSER_AUTO_DIR } else { Join-Path $env:USERPROFILE '.codex\skills\browser-auto' }
+# 快照输出到本脚本所在目录下的 snapshots/（以脚本自身为基准，不依赖绝对路径）
+$outDir = Join-Path $PSScriptRoot 'snapshots'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 # 音色 → 官方条款 URL（我方已使用的 16 个 VOICEVOX 音色）

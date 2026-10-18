@@ -29,7 +29,14 @@ VOICEVOX 软件本体免费（含商用）。用它合成的音频可以自由�
 - 不得用于诽谤中伤、政治宣传、宗教活动等用途
 - 各音色的具体条款以其官方发布为准
 
-完整音色列表与各自条款：<https://voicevox.hiroshiba.jp/>
+**官方条款原文**（用户应能自行核对，不要只信本文件的转述）：
+
+- VOICEVOX 软件利用规约：<https://voicevox.hiroshiba.jp/term/>
+- ずんずんプロジェクト音源利用规约（ずんだもん等）：
+  <https://zunko.jp/con_ongen_kiyaku.html>
+- 完整音色列表与各自条款：<https://voicevox.hiroshiba.jp/>
+- 官方音源总条款（含各角色摘要）：
+  <https://github.com/VOICEVOX/voicevox_vvm/blob/main/TERMS.txt>
 
 > **如果你要再分发本项目的语音文件**（例如打包自己的语音包），
 > 请自行确认所涉音色的最新利用规约。本项目的 `LICENSE`（MIT）
