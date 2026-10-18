@@ -52,6 +52,12 @@ param(
   [string]$VoiceRoot = '',
   # 用户语音包根目录（可写），仅用于诊断日志。
   [string]$UserVoiceRoot = '',
+  # v0.4.34：日志级别。info（默认）= 只记元数据；debug = 记标题与正文。
+  #
+  # 为什么需要：日志会写进 %TEMP%，用户提 Issue 时经常直接上传。
+  # 标题与正文可能含项目名、人名，对诊断「为什么不响」却没帮助。
+  [ValidateSet('info', 'debug')]
+  [string]$LogLevel = 'info',
   # v0.4.16：数字增益倍数（1.0 = 原样；2.0 = 放大一倍）。
   #
   # 为什么需要：实测本包 247 个语音包峰值中位仅 **40.4%**
@@ -281,6 +287,23 @@ try {
   $logDir = Join-Path ([System.IO.Path]::GetTempPath()) 'dsh-notify-say'
   if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
   $logFile = Join-Path $logDir 'notify.log'
+
+# v0.4.34：写一行日志。$detail = 含用户内容（标题/正文），只在 debug 档写。
+#
+# 用函数而不是内联 Add-Content：三处调用点都要同样判断，
+# 内联会让"某处忘了判断"这种遗漏很难看出来。
+function Write-NotifyLog([string]$KindTag, [string]$Extra, [string]$Detail) {
+  if (-not $logFile) { return }
+  try {
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $parts = @($ts, "[$KindTag]", $Extra)
+    if ($Detail) {
+      if ($LogLevel -eq 'debug') { $parts += $Detail }
+      else { $parts += '(内容已隐藏，需 -LogLevel debug)' }
+    }
+    Add-Content -Path $logFile -Value (($parts -join ' ').Trim()) -Encoding utf8
+  } catch { }
+}
   # 审查建议采纳：容量护栏——超过 512KB 整文件重建（best-effort 诊断日志，不做轮转）
   if ((Test-Path -LiteralPath $logFile) -and ((Get-Item -LiteralPath $logFile -ErrorAction SilentlyContinue).Length -gt 524288)) {
     Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue
@@ -475,16 +498,16 @@ $pickedName = if ($script:playFile) { Split-Path $script:playFile -Leaf } else {
 if ($Preview) {
   if (-not $NoSound) { Play-VoiceLine }
   $soundTag = if ($NoSound) { '（静音）' } elseif ($script:lastSound) { " + 音效 $script:lastSound" } else { ' + 兜底提示音' }
-  if ($logFile) { try { Add-Content -Path $logFile -Value ("{0} [preview] [{1}] -Voice {2} pick={3}{4}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Kind, $Voice, $pickedName, $soundTag) -Encoding utf8 } catch { } }
+  Write-NotifyLog 'preview' ("-Voice $Voice pick=$pickedName$soundTag") ''
   Write-Host ("[dsh-notify-say] OK 试听 [$Kind] pick=" + $pickedName + $soundTag) -ForegroundColor Green
 } elseif ($shown) {
   if (-not $NoSound) { Play-VoiceLine }
   $soundTag = if ($NoSound) { '（静音）' } elseif ($script:lastSound) { " + 音效 $script:lastSound" } else { ' + 兜底提示音' }
-  if ($logFile) { try { Add-Content -Path $logFile -Value ("{0} [toast] [{1}] {2} - {3} pick={4}{5}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Kind, $Title, $Body, $pickedName, $soundTag) -Encoding utf8 } catch { } }
+  Write-NotifyLog 'toast' ("pick=$pickedName$soundTag") ("title=$Title body=$Body")
   Write-Host ("[dsh-notify-say] OK Toast [$Kind] pick=" + $pickedName + $soundTag) -ForegroundColor Green
 } else {
   if (-not $NoSound) { Play-VoiceLine }
   $soundTag = if ($NoSound) { '（静音）' } elseif ($script:lastSound) { " + 音效 $script:lastSound" } else { ' + 兜底提示音' }
-  if ($logFile) { try { Add-Content -Path $logFile -Value ("{0} [FALLBACK] [{1}] {2} - {3} pick={4}{5}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Kind, $Title, $Body, $pickedName, $soundTag) -Encoding utf8 } catch { } }
+  Write-NotifyLog 'FALLBACK' ("pick=$pickedName$soundTag") ("title=$Title body=$Body")
   Write-Host ("[dsh-notify-say] (Toast 不可用，走兜底) [$Kind] pick=" + $pickedName + $soundTag) -ForegroundColor Yellow
 }
