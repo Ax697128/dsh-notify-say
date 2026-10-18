@@ -203,53 +203,55 @@ test('D5: index.js 有重载漏报诊断', () => {
   assert.match(INDEX, /Symbol\.for\('dsh-notify-say\.eventCount'\)/,
     'key 应带插件名（避免与其它插件冲突）');
 });
+// ══ 打包与变更记录（v0.4.45）════════════════════════════════════════════
+//
+// ⚠️ 一个重要区别：`tools/release-build.ps1` 是**维护者工具**，
+// 不随发布包分发（发布包的 tools\ 里只有 notify-config.ps1）。
+// 所以检查它的那些断言在发布包里必须 skip，否则 CI 必然红。
+//（v0.4.45 首跑 CI 就是这么红的：D6/D7/D8 去读一个不存在的文件。）
+const RELEASE_BUILD = join(ROOT, 'tools', 'release-build.ps1');
+const hasReleaseBuild = existsSync(RELEASE_BUILD);
+const SKIP_DEVONLY = hasReleaseBuild ? false : 'release-build.ps1 是维护者工具，不在发布包内';
+
 // ── D6: 打包不得带临时/备份文件（fail-closed）──────────────────────────
-test('D6: release-build 有垃圾文件闸（.bak/.tmp 不得进发布包）', () => {
+test('D6: release-build 有垃圾文件闸（.bak/.tmp 不得进发布包）', { skip: SKIP_DEVONLY }, () => {
   // ⚠️ 2026-10-18 真实事故：我把 mutation 测试用的
   // `lib/dev-reload.js.bak` 忘在源码目录里，release-build 把它一起
   // 复制进发布包 —— **而且已经推到 GitHub 与 npm**。
   //
   // 内容无害，但发布物里出现 .bak 是明显疏漏：用户疑惑、包体积白涨、
-  // 而且说明打包流程没检查"目录里有没有残留"。
-  //
-  // 所以加一道 fail-closed 的闸：宁可中止构建，也不发带垃圾的包。
-  const rb = readFileSync(join(ROOT, 'tools', 'release-build.ps1'), 'utf8');
+  // 而且说明打包流程没检查「目录里有没有残留」。
+  const rb = readFileSync(RELEASE_BUILD, 'utf8');
 
-  assert.match(rb, /junkPattern/,
-    '应有垃圾文件模式定义');
+  assert.match(rb, /junkPattern/, '应有垃圾文件模式定义');
   assert.match(rb, /\.\(bak\|tmp\|orig\|rej\|swp\)/,
     '应覆盖常见编辑器/工具残留（.bak/.tmp/.orig/.rej/.swp）');
-  assert.match(rb, /exit 1/,
-    '发现垃圾文件必须中止构建（fail-closed），不能只警告');
+  assert.match(rb, /exit 1/, '发现垃圾文件必须中止构建（fail-closed），不能只警告');
 
-  // 闸门要在"复制完成之后"才有效 —— 检查位置在 CHANGELOG 之前
   const guardAt = rb.indexOf('$junkPattern');
   const clAt = rb.indexOf('生成 CHANGELOG');
   assert.ok(guardAt > 0 && clAt > 0 && guardAt < clAt,
     '垃圾闸应在复制完成后、写 CHANGELOG 之前');
 });
 
-// ── D7: CHANGELOG 过滤器必须挡住内部内容 ────────────────────────────────
-test('D7: CHANGELOG 生成器过滤内部标记与 hash', () => {
+// ── D7: CHANGELOG 过滤器必须挡住内部内容 ──────────────────────────────
+test('D7: CHANGELOG 生成器过滤内部标记与 hash', { skip: SKIP_DEVONLY }, () => {
   // 公开仓库只有 release: vX.Y.Z 快照，外部看不到每次改了什么。
   // 但**也不能原样输出开发提交标题** —— 实测早期标题是内部笔记风格：
   //   · CARD：#7849 跟进评论回写
   //   · RECOVERY.md 救援说明（三级回滚…）
   //   · deploy-snapshots/desktop-profile-pre-...
   //   · a306b8d / b9d83e1（私有仓库 hash）
-  const rb = readFileSync(join(ROOT, 'tools', 'release-build.ps1'), 'utf8');
+  const rb = readFileSync(RELEASE_BUILD, 'utf8');
 
-  assert.match(rb, /publicTypes/,
-    '应只保留面向使用者的提交类型');
+  assert.match(rb, /publicTypes/, '应只保留面向使用者的提交类型');
   for (const t of ['feat', 'fix', 'perf', 'refactor']) {
     assert.match(rb, new RegExp(`'${t}'`), `publicTypes 应含 ${t}`);
   }
-  // docs/test/chore/ci 是内部维护，不应出现在公开变更记录里
   assert.doesNotMatch(rb, /publicTypes = @\([^)]*'(docs|test|chore|ci)'/,
     'docs/test/chore/ci 不应算面向使用者的类型');
 
-  assert.match(rb, /internalMarkers/,
-    '应有内部标记黑名单');
+  assert.match(rb, /internalMarkers/, '应有内部标记黑名单');
   for (const m of ['CARD', 'RECOVERY', '交接备忘', 'deploy-snapshots']) {
     assert.ok(rb.includes(m),
       `internalMarkers 应含 ${m} —— 实测这些标记会带出内部资料引用`);
@@ -259,28 +261,80 @@ test('D7: CHANGELOG 生成器过滤内部标记与 hash', () => {
     '应剥掉 7~40 位十六进制串（私有仓库 hash 在公开仓库里指不到东西）');
 });
 
-// ── D8: CHANGELOG.md 必须在 npm 的 files 白名单里 ───────────────────────
-test('D8: CHANGELOG.md 随包分发，且内部资料不随包', () => {
-  // ⚠️ 注意：**源 package.json 与发布包 package.json 是两份不同的东西**。
-  //
-  // 源的 `files` 服务于本地 link 安装（甚至列了 CARD.md / RECOVERY.md）；
-  // 发布包的 `files` 由 release-build.ps1 重写 —— 那才是 npm 用户拿到的。
-  //（我第一版拿源 package.json 去断言，是搞错了对象。）
-  const rb = readFileSync(join(ROOT, 'tools', 'release-build.ps1'), 'utf8');
+// ── D8: 已发布的 CHANGELOG 本身要干净（这条在两种环境都跑）────────────
+test('D8: 随包发布的 CHANGELOG 不含内部标记 / hash / 本机路径', () => {
+  // 这条查的是**产物**而不是生成器，所以在发布包里也能跑 ——
+  // 而且它比"检查生成器源码"更接近真实：用户拿到的就是这份文件。
+  const cl = join(ROOT, 'CHANGELOG.md');
+  if (!existsSync(cl)) return;   // 开发目录没有（它是构建产物），跳过
 
-  // 1) CHANGELOG.md 必须进发布包的 files（否则 npm 用户看不到变更记录）
+  const c = readFileSync(cl, 'utf8');
+
+  // 内部资料标记：提到这些说明过滤失效了
+  for (const m of ['CARD', 'RECOVERY', '交接备忘', 'deploy-snapshots', 'app.asar', '待做清单']) {
+    assert.ok(!c.includes(m),
+      `CHANGELOG 里出现了内部标记「${m}」—— 过滤失效，会带出内部资料引用`);
+  }
+
+  // 私有仓库的提交 hash 在公开仓库里指不到任何东西，反而误导
+  const hex = c.match(/\b[0-9a-f]{7,40}\b/g) || [];
+  assert.deepEqual(hex, [],
+    `CHANGELOG 里出现了疑似提交 hash：${hex.slice(0, 5).join(', ')}`);
+
+  // 本机绝对路径
+  assert.doesNotMatch(c, /[A-Za-z]:\\\\/, '不得含本机绝对路径');
+
+  // 得有实际内容（防"生成器坏了、产出一个空文件"）
+  assert.match(c, /^## v\d+\.\d+\.\d+/m, 'CHANGELOG 应含至少一个版本节');
+});
+
+// ── D8b: 生成器配置（仅开发目录）───────────────────────────────────────
+test('D8b: CHANGELOG 由构建脚本生成，且内部资料不进发布包', { skip: SKIP_DEVONLY }, () => {
+  // 注意：**源 package.json 与发布包 package.json 是两份不同的东西**。
+  // 源的 files 服务于本地 link 安装（甚至列了 CARD.md / RECOVERY.md）；
+  // 发布包那份由 release-build.ps1 重写 —— 那才是 npm 用户拿到的。
+  const rb = readFileSync(RELEASE_BUILD, 'utf8');
+
   assert.match(rb, /'CHANGELOG\.md',/,
     'CHANGELOG.md 必须出现在 release-build 写出的 files 数组里 —— '
     + '同类事故：THIRD-PARTY-NOTICES.md 曾漏了 files，导致 npm 包没有任何第三方声明');
 
-  // 2) 内部资料不得进发布包的 files
   const filesBlock = rb.slice(rb.indexOf('files'), rb.indexOf('keywords'));
   for (const internal of ['CARD.md', 'RECOVERY.md']) {
     assert.ok(!filesBlock.includes(internal),
       `${internal} 是内部资料，不得出现在发布包的 files 里`);
   }
 
-  // 3) 它必须真的被"生成"出来，而不是靠复制
   assert.match(rb, /WriteAllText\(\(Join-Path \$Destination 'CHANGELOG\.md'\)/,
     'CHANGELOG.md 应由构建脚本生成到目标目录（不是从源码目录复制）');
+});
+
+// ── D9: 发版流程必须在**发布包里**跑一次测试 ────────────────────────────
+test('D9: release.ps1 在构建后、推送前，于发布包内跑测试', { skip: SKIP_DEVONLY }, () => {
+  // ⚠️ 2026-10-18 真实代价：D6/D7/D8 去读 `tools/release-build.ps1`，
+  // 而那是**维护者工具、不在发布包里** ——
+  // 于是开发目录全绿、推上去 CI 三平台全红。
+  //
+  // 根因不是那三条测试写错，而是**发版流程只在开发目录跑测试**，
+  // 而 CI 跑的是发布包（公开仓库本身就是发布包）。两者文件集不同。
+  //
+  // 修法：步骤 3 重建发布包之后、步骤 4 推送之前，再跑一次测试。
+  // 这样"本地绿、线上红"在推之前就会暴露。
+  const rp = readFileSync(join(ROOT, 'tools', 'release.ps1'), 'utf8');
+
+  const step35 = rp.indexOf('3.5 在发布包里跑测试');
+  const step3 = rp.indexOf("Write-Step '3. 重建发布包'");
+  const step4 = rp.indexOf("Write-Step '4. 提交并推送 GitHub'");
+
+  assert.ok(step3 > 0 && step35 > 0 && step4 > 0,
+    'release.ps1 应有步骤 3 / 3.5 / 4');
+  assert.ok(step35 > step3 && step35 < step4,
+    '3.5 必须在「重建发布包」之后、「推送 GitHub」之前 —— '
+    + '顺序错了就起不到拦截作用');
+
+  // 必须在发布包目录里跑，且失败要中止
+  assert.match(rp, /Push-Location \$ReleaseDir/,
+    '应在发布包目录里执行');
+  assert.match(rp, /throw 'release-package tests failed'/,
+    '发布包内测试失败必须中止发版（fail-closed）');
 });
