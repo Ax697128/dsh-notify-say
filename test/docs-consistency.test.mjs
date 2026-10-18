@@ -437,3 +437,59 @@ test('D15: MANIFEST 的版本回溯栏可用（不是 unknown）', { skip: SKIP_
   assert.match(rb, /版本回溯/,
     '应指向可查的公开提交 / CHANGELOG');
 });
+// ── D16: .ps1 必须是 LF ─────────────────────────────────────────────────
+test('D16: PowerShell 脚本用 LF（与 .gitattributes 一致）', () => {
+  // ⚠️ 2026-10-18 核实时发现真实分歧：
+  //
+  //   本地工作树  CRLF
+  //   发布包      CRLF   ← release-build 从工作树复制
+  //   GitHub      纯LF   ← .gitattributes 的 `*.ps1 text eol=lf` 归一化
+  //
+  // 于是"同版本"的两个产物字节不同：npm 用户拿到 CRLF，GitHub 用户拿到 LF。
+  // 两者都能跑（实测通过），但**测的东西和用户拿的东西不是一个**，
+  // 任何按字节校验/哈希对比都会对不上。
+  //
+  // 修法：工作树也归一成 LF（对 git 是 no-op，因为索引本来就是 LF）。
+  // 这条测试防止以后有人用会写 CRLF 的工具改 ps1。
+  const bad = [];
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name.startsWith('.tmp')) continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!e.name.toLowerCase().endsWith('.ps1')) continue;
+      try {
+        const buf = readFileSync(p);
+        if (buf.includes(13)) bad.push(p.slice(ROOT.length + 1));
+      } catch { /* 读不到就跳过 */ }
+    }
+  };
+  walk(ROOT);
+
+  assert.deepEqual(bad, [],
+    '.ps1 里出现了 CR (CRLF 行尾) —— 与 .gitattributes 的 eol=lf 不一致，'
+    + '会导致发布包与 GitHub 版本字节不同：\n' + bad.join('\n'));
+});
+// ── D17: README 的联网说明必须涵盖"检查更新" ────────────────────────────
+test('D17: README 如实说明检查更新也会联网', () => {
+  // ⚠️ 2026-10-18 第四轮审阅指出：v0.4.48 加了"挂载时自动查版本"，
+  // 但 README 仍写着"不下载语音包的话，这个插件不会联网" —— 文档与行为冲突。
+  //
+  // 用户对"全离线"是有期待的。加了自动联网就必须说清楚。
+  assert.doesNotMatch(README, /不下载语音包的话，这个插件不会联网/,
+    '这句已不成立：设置页挂载时会查版本（缓存过期时访问 npm/GitHub）');
+
+  // 必须明确列出"检查更新"也会联网
+  assert.match(README, /检查更新/,
+    'README 应提到检查更新');
+  assert.match(README, /npm registry|npm 与 GitHub|npm\/GitHub/,
+    '应说明检查更新访问的是哪些地址');
+  assert.match(README, /24 小时/,
+    '应说明检查频率（用户有权知道多久联一次网）');
+
+  // 也要说明失败不影响功能
+  assert.match(README, /不影响通知|照常工作/,
+    '应说明联网失败不影响通知与语音');
+});

@@ -126,7 +126,7 @@ test('V3: 解压前检查声明大小，解压时带 maxOutputLength', () => {
 test('V4: 安装切换是备份 + 回滚，不是先删旧包', () => {
   const at = DL.indexOf('原子切换');
   assert.ok(at > 0, '应能找到原子切换那段');
-  const seg = DL.slice(at, at + 4500);   // 注释较长，窗口要够
+  const seg = DL.slice(at, at + 8000);   // 注释较长 + 流式改动后位移，窗口要够
 
   assert.match(seg, /backupDir/, '应有备份目录变量');
   assert.match(seg, /renameSync\(finalDir, backupDir\)/,

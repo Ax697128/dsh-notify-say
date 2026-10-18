@@ -419,3 +419,141 @@ test('W20: 两个地址都失败时明确报错', async () => {
   assert.equal(r.ok, false);
   assert.match(r.error, /503/, '应把最后一次的失败原因带出来');
 });
+// ── W21: 下载走流式限额（不先读完整响应）────────────────────────────────
+test('W21: 有 res.body 时用流式读取，超限立即中止', async () => {
+  // 第三轮审阅指出：原来 `res.arrayBuffer()` 读完整响应才查大小 ——
+  // Content-Length 是服务器说了算的，谎报时内存会被吃满再检查。
+  const { installVoicePack } = await import('../lib/voice-pack-download.js');
+
+  // 造一个永远吐 1 MB 块的流，总共吐 40 块（40 MB > 32 MB 上限）
+  let pulled = 0;
+  let cancelled = false;
+  const chunk = Buffer.alloc(1024 * 1024, 0x41);
+
+  const fakeFetch = async () => ({
+    ok: true,
+    // ⚠️ 故意谎报 Content-Length：报 1 KB，实际 40 MB
+    headers: { get: (k) => (String(k).toLowerCase() === 'content-length' ? '1024' : null) },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (pulled >= 40) return { done: true, value: undefined };
+            pulled++;
+            return { done: false, value: chunk };
+          },
+          async cancel() { cancelled = true; },
+        };
+      },
+    },
+    arrayBuffer: async () => { throw new Error('不应调用 arrayBuffer（应走流式）'); },
+  });
+
+  const r = await installVoicePack('w21-test', {
+    url: 'https://example.invalid/x.zip',
+    sha256: 'a'.repeat(64),
+    fetchImpl: fakeFetch,
+    logger: { info() {}, warn() {} },
+  });
+
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'pack-too-large', '超限应报 pack-too-large');
+  assert.equal(cancelled, true, '超限后必须 cancel 流，停止继续拉取');
+  assert.ok(pulled < 40,
+    `应在超过 32 MB 时立即中止，不该读完 40 块（实际拉了 ${pulled} 块）`);
+});
+
+// ── W22: 没有 res.body 时退回 arrayBuffer（老运行时兼容）────────────────
+test('W22: 没有 res.body 时退回整块读取，并事后校验大小', async () => {
+  const { installVoicePack } = await import('../lib/voice-pack-download.js');
+
+  // 32 MB + 1 字节，且不带 body → 走 arrayBuffer 分支，事后应被拒
+  const big = Buffer.alloc(32 * 1024 * 1024 + 1, 0x42);
+  const fakeFetch = async () => ({
+    ok: true,
+    headers: { get: () => null },   // 不报 Content-Length
+    arrayBuffer: async () => big.buffer.slice(big.byteOffset, big.byteOffset + big.length),
+  });
+
+  const r = await installVoicePack('w22-test', {
+    url: 'https://example.invalid/x.zip',
+    sha256: 'a'.repeat(64),
+    fetchImpl: fakeFetch,
+    logger: { info() {}, warn() {} },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'pack-too-large', '退回分支也必须事后校验大小');
+});
+
+// ── W23: 流式路径能正确拼接分块 ─────────────────────────────────────────
+test('W23: 流式分块能正确拼成完整 zip（不是只拿第一块）', async () => {
+  const { installVoicePack, listZipEntries } = await import('../lib/voice-pack-download.js');
+  const { createHash } = await import('node:crypto');
+
+  // 造一个真实的小 zip，把它切成多块喂进去
+  const zip = buildTinyZip('a.txt', Buffer.from('hello', 'utf8'));
+  const sha = createHash('sha256').update(zip).digest('hex');
+
+  const parts = [];
+  for (let i = 0; i < zip.length; i += 7) parts.push(zip.subarray(i, i + 7));
+  let idx = 0;
+
+  const fakeFetch = async () => ({
+    ok: true,
+    headers: { get: () => String(zip.length) },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (idx >= parts.length) return { done: true, value: undefined };
+            const v = parts[idx++];
+            return { done: false, value: new Uint8Array(v) };
+          },
+          async cancel() {},
+        };
+      },
+    },
+  });
+
+  const r = await installVoicePack('w23-test', {
+    url: 'https://example.invalid/x.zip',
+    sha256: sha,
+    fetchImpl: fakeFetch,
+    logger: { info() {}, warn() {} },
+  });
+
+  // 这个小 zip 没有 wav，install 会因为"找不到可安装文件"之类的理由失败，
+  // 但**绝不该是 sha256-mismatch** —— 那说明分块没拼对。
+  assert.notEqual(r.error, 'sha256-mismatch',
+    '分块拼接错误会导致哈希对不上；这里哈希应匹配，说明拼装正确');
+});
+// ── 测试辅助：构造最小 stored ZIP ────────────────────────────────────────
+function buildTinyZip(name, content) {
+  const nameBuf = Buffer.from(name, 'utf8');
+  const lfh = Buffer.alloc(30);
+  lfh.writeUInt32LE(0x04034b50, 0);
+  lfh.writeUInt16LE(20, 4);
+  lfh.writeUInt16LE(0, 8);                 // stored
+  lfh.writeUInt32LE(content.length, 18);   // compSize
+  lfh.writeUInt32LE(content.length, 22);   // uncompSize
+  lfh.writeUInt16LE(nameBuf.length, 26);
+
+  const cd = Buffer.alloc(46);
+  cd.writeUInt32LE(0x02014b50, 0);
+  cd.writeUInt16LE(20, 4);
+  cd.writeUInt16LE(20, 6);
+  cd.writeUInt32LE(content.length, 20);
+  cd.writeUInt32LE(content.length, 24);
+  cd.writeUInt16LE(nameBuf.length, 28);
+
+  const local = Buffer.concat([lfh, nameBuf, content]);
+  const central = Buffer.concat([cd, nameBuf]);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(central.length, 12);
+  eocd.writeUInt32LE(local.length, 16);
+
+  return Buffer.concat([local, central, eocd]);
+}

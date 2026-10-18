@@ -58,24 +58,26 @@ test('U2: 版本格式异常时 hasUpdate 为 null（不误报）', async () => 
   }
 });
 
-// ── U3: 开发模式（Junction / 源码）不给升级命令 ─────────────────────────
-test('U3: 开发模式不给出会覆盖源码的命令', async () => {
-  const { upgradeHint, detectInstallMode } = await import('../lib/update-check.js');
+// ── U3: 三种安装方式各自给正确指引 ──────────────────────────────────────
+test('U3: development 不给命令；managed 给命令；unknown 只给查证指引', async () => {
+  const { upgradeHint } = await import('../lib/update-check.js');
 
-  const dev = upgradeHint('dev');
+  const dev = upgradeHint('development', {});
   assert.equal(dev.command, '',
-    '开发模式必须**没有**命令 —— 本机是 Junction 指向开发源码，'
-    + '用 dsh plugin update 会直接覆盖掉源码');
-  assert.match(dev.note, /不要/,
-    '必须明确劝阻用插件升级命令');
+    'development（源码/Junction）必须**没有**命令 —— 用插件升级命令会覆盖源码');
+  assert.match(dev.note, /不要/, '必须明确劝阻');
 
-  const npm = upgradeHint('npm');
-  assert.match(npm.command, /dsh plugin .*update dsh-notify-say/,
-    'npm 安装才给 dsh 的升级命令');
-  assert.match(npm.command, /<.*profile.*>/,
+  const managed = upgradeHint('managed', { npmLatest: '0.4.50', githubLatest: '0.4.50' });
+  assert.match(managed.command, /dsh plugin .*update dsh-notify-say/,
+    'managed（包管理器安装）才给 dsh 的升级命令');
+  assert.match(managed.command, /<.*profile.*>/,
     'profile 名无法可靠得知，必须用占位符而不是假装知道');
-  assert.match(npm.note, /重启/,
-    '要提示更新后需重启 profile');
+  assert.match(managed.note, /重启/, '要提示更新后需重启 profile');
+
+  const unknown = upgradeHint('unknown', {});
+  assert.equal(unknown.command, '',
+    'unknown 时宁可不给命令 —— 给错了会让用户覆盖掉自己的安装');
+  assert.match(unknown.note, /无法确定|查证|安装来源/, '应说明无法确定并给出查证方向');
 });
 
 // ── U4: 源失败要回退，两个都失败要如实报错 ──────────────────────────────
@@ -352,6 +354,100 @@ test('U14: 两个源都落后于本地时不提示更新', async () => {
     const r = await checkForUpdate({ pluginRoot: tmp, force: true, fetchImpl: fake });
     assert.equal(r.latest, '0.4.48', '取较高的那个（0.4.48 > 0.4.40）');
     assert.equal(r.hasUpdate, false, '两个源都低于本地 0.5.0，不该提示更新');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+// ══ 第四轮审阅（v0.4.51）══════════════════════════════════════════════════
+
+// ── U15: pnpm 安装不能被误判成开发模式 ─────────────────────────────────
+test('U15: 路径在 node_modules 下 → managed（即使项目根有 .git）', async () => {
+  // ⚠️ 这是核实出来的**真 bug**：
+  //
+  //   原实现先往上找 .git、再比对 realpath。而 pnpm 安装的真实路径是
+  //   `<项目>/node_modules/.pnpm/<pkg>@<ver>/node_modules/<pkg>` ——
+  //   项目根本身通常就有 .git，于是判成"开发模式"，提示用户
+  //   「检测到源码安装，请不要用插件升级命令」。
+  //
+  // 而 DSH 就是用 pnpm 管插件的 —— 也就是**绝大多数用户都会看到反的提示**。
+  const { detectInstallMode } = await import('../lib/update-check.js');
+  const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+
+  const tmp = join(ROOT, '.tmp-u15-' + Math.random().toString(36).slice(2, 8));
+  try {
+    // 造 pnpm 结构：node_modules/.pnpm/<pkg>@1/node_modules/<pkg>
+    const real = join(tmp, 'node_modules', '.pnpm', 'pkg@1', 'node_modules', 'pkg');
+    mkdirSync(real, { recursive: true });
+    writeFileSync(join(real, 'package.json'), JSON.stringify({ name: 'pkg', version: '1.0.0' }));
+    // 项目根放 .git（真实项目都有）
+    mkdirSync(join(tmp, '.git'), { recursive: true });
+    writeFileSync(join(tmp, '.git', 'HEAD'), 'ref: refs/heads/main');
+
+    assert.equal(detectInstallMode(real), 'managed',
+      'node_modules 下的路径必须判为 managed —— 它是包管理器装的，不是开发模式');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ── U16: 运行版本 vs 磁盘版本 → 提示重启 ────────────────────────────────
+test('U16: 磁盘已升级但没重启时，提示重启而不是「已是最新」', async () => {
+  // 用户可以在 DSH 运行期间升级插件：磁盘 package.json 已是新版，
+  // 但进程里跑的还是旧 JS 模块。只看磁盘会显示"已是最新"，其实要重启。
+  const { checkForUpdate } = await import('../lib/update-check.js');
+  const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+
+  const tmp = join(ROOT, '.tmp-u16-' + Math.random().toString(36).slice(2, 8));
+  try {
+    mkdirSync(tmp, { recursive: true });
+    // 磁盘上是 0.5.0
+    writeFileSync(join(tmp, 'package.json'), JSON.stringify({ version: '0.5.0' }));
+
+    const fake = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.5.0' } }) });
+
+    // 但运行中的代码还是 0.4.0
+    const r = await checkForUpdate({
+      pluginRoot: tmp, runningVersion: '0.4.0', force: true, fetchImpl: fake,
+    });
+
+    assert.equal(r.running, '0.4.0', 'running 应是正在跑的版本');
+    assert.equal(r.installed, '0.5.0', 'installed 应是磁盘上的版本');
+    assert.equal(r.needsRestart, true, '两者不同 → 需要重启');
+    assert.equal(r.hasUpdate, false,
+      '磁盘已经是最新 → 不该再提示"有新版本可升级"（用户已经装了）');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ── U17: npm 落后时升级指引要如实说明 ──────────────────────────────────
+test('U17: npm 落后于 GitHub 时，提示可能装不到那个版本', async () => {
+  // 第四轮审阅指出：只报一个合并后的 latest，会出现
+  //   「提示 0.4.50，但 npm 安装的用户执行升级命令只拿到 0.4.48」。
+  const { checkForUpdate } = await import('../lib/update-check.js');
+  const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+
+  const tmp = join(ROOT, '.tmp-u17-' + Math.random().toString(36).slice(2, 8));
+  try {
+    // 必须让 pluginRoot 真的在 node_modules 下，才会被判成 managed
+    const pkgDir = join(tmp, 'node_modules', 'dsh-notify-say');
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ version: '0.4.40' }));
+
+    const fake = async (url) => {
+      if (String(url).includes('registry.npmjs.org')) {
+        return { ok: true, json: async () => ({ 'dist-tags': { latest: '0.4.48' } }) };
+      }
+      return { ok: true, json: async () => ({ version: '0.4.50' }) };
+    };
+
+    const r = await checkForUpdate({ pluginRoot: pkgDir, force: true, fetchImpl: fake });
+
+    assert.equal(r.npmLatest, '0.4.48', '要单独保留 npm 的版本');
+    assert.equal(r.githubLatest, '0.4.50', '要单独保留 GitHub 的版本');
+    assert.equal(r.latest, '0.4.50', 'latest 取较高的');
+    assert.match(r.note, /npm.*还没有|可能只能升到/,
+      'npm 落后时必须如实说明，否则用户照提示操作会装不到那个版本');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
