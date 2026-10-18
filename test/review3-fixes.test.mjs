@@ -142,8 +142,14 @@ test('Y4: voice-regions 尊重 DSH_NOTIFY_SAY_DATA_DIR（与 store 同源）', a
 // ── Y5: 离线时卸载按钮不能禁用 ──────────────────────────────────────────
 test('Y5: 已安装但不可下载时，卸载按钮仍可用', () => {
   const src = readFileSyncSafe(join(ROOT, 'lib', 'client.js'));
-  // 判据：disabled 不能只看 downloadable
-  const m = src.match(/disabled:\s*s\.busy\s*\|\|\s*([^,\n]+)/);
+  // ⚠️ 不能用「全文第一个 `disabled: s.busy ||`」——
+  // v0.4.54 加了试听按钮（`s.busy || (pvState.kind !== "")`），会先命中它。
+  // 改成按上下文精确定位：找「卸载 / 下载」按钮那一段。
+  const at = src.indexOf("removePack(p.key, p.name || p.key)");
+  assert.ok(at > 0, '应能找到语音包的下载/卸载按钮');
+  // 取该按钮前后一段，找其中的 disabled 条件
+  const seg = src.slice(Math.max(0, at - 700), at + 120);
+  const m = seg.match(/disabled:\s*s\.busy\s*\|\|\s*([^,\n]+)/);
   assert.ok(m, '应能找到下载/卸载按钮的 disabled 条件');
   const cond = m[1];
   assert.match(cond, /p\.installed/,
