@@ -372,3 +372,50 @@ test('W17: 损坏的 zip 返回结构化错误而不是崩溃', () => {
   assert.equal(r.ok, false);
   assert.ok(r.error, '应给出错误原因');
 });
+
+// ── W18: 索引地址不能依赖 /releases/latest（否则发个插件版就把音色列表弄坏）──
+test('W18: 索引用固定 tag，latest 只作回退', async () => {
+  const { PACK_INDEX_URL, PACK_INDEX_URL_FALLBACK, fetchPackIndex } =
+    await import('../lib/voice-pack-download.js');
+
+  // 外部审阅 2026-10-18 指出：`/releases/latest/download/packs.json` 的问题是，
+  // latest 指向最新 Release —— 若哪天发了个只有插件的版本，
+  // 它没有 packs.json → 404 → 旧下载器的音色列表整个失效。
+  assert.doesNotMatch(PACK_INDEX_URL, /releases\/latest/,
+    '主地址不能用 latest —— 发一个不带 packs.json 的 Release 就会让它 404');
+  assert.match(PACK_INDEX_URL, /releases\/download\/voice-packs\/packs\.json/,
+    '主地址应是固定 tag voice-packs');
+  assert.match(PACK_INDEX_URL_FALLBACK, /releases\/latest/,
+    'latest 保留为回退（固定 tag 还没建好时仍能用）');
+});
+
+// ── W19: 固定地址失败要自动回退 ─────────────────────────────────────────
+test('W19: 固定地址失败时回退到 latest', async () => {
+  const { PACK_INDEX_URL, PACK_INDEX_URL_FALLBACK, fetchPackIndex } =
+    await import('../lib/voice-pack-download.js');
+
+  const seen = [];
+  const fake = async (url) => {
+    seen.push(url);
+    if (url === PACK_INDEX_URL) return { ok: false, status: 404 };
+    return {
+      ok: true,
+      json: async () => ({ packs: [{ key: 'k', file: 'k.zip', sha256: 'a'.repeat(64) }] }),
+    };
+  };
+
+  const r = await fetchPackIndex({ fetchImpl: fake });
+  assert.equal(r.ok, true, '回退后应成功');
+  assert.equal(r.source, 'fallback', '应标明用的是回退地址（排查"列表是旧的"时有用）');
+  assert.deepEqual(seen, [PACK_INDEX_URL, PACK_INDEX_URL_FALLBACK],
+    '应先试固定地址，失败再试 latest');
+});
+
+// ── W20: 两个地址都失败时要报错，不能静默成功 ───────────────────────────
+test('W20: 两个地址都失败时明确报错', async () => {
+  const { fetchPackIndex } = await import('../lib/voice-pack-download.js');
+  const fake = async () => ({ ok: false, status: 503 });
+  const r = await fetchPackIndex({ fetchImpl: fake });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /503/, '应把最后一次的失败原因带出来');
+});

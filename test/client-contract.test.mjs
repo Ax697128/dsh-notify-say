@@ -159,3 +159,81 @@ test('C34: 前端只传 key，不构造下载地址', () => {
   assert.doesNotMatch(seg, /https?:\/\//,
     '前端不得出现下载 URL —— 地址必须由 host 从固定源算（否则就是 SSRF）');
 });
+// ── C35: 所有 set 返回必须带 packs（防状态字段被清掉）────────────────────
+test('C35: 每个 set 的状态重建都保留 packs（否则语音包区会失效）', () => {
+  const lines = client.split(/\r?\n/);
+  const bad = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (/return \{/.test(lines[i])) {
+      const block = lines.slice(i, i + 6).join(' ');
+      // 只检查"状态重建"形态（含 loaded:），不是普通数据对象
+      if (/loaded:/.test(block) && !/packs:/.test(block)) {
+        bad.push(i + 1);
+      }
+    }
+  }
+
+  assert.deepEqual(bad, [],
+    '这些 set 返回没带 packs —— 组件状态是整体对象，漏字段等于把它重置成 undefined。\n'
+    + '表现：拖一下音量滑杆，语音包区就白了/显示"加载失败"。\n'
+    + '行号：' + bad.join(', '));
+});
+
+// ── C36: apply 的 success 分支也要带 packs ──────────────────────────────
+test('C36: apply 成功后重新套用 values 时不能丢 packs', () => {
+  const at = client.indexOf('function apply(patch, label) {');
+  assert.ok(at > 0, '应能找到 apply');
+  const seg = client.slice(at, at + 1400);
+
+  // success 分支里同时出现 values 与 packs 才算对
+  assert.match(seg, /values: r\.values \|\| p\.values/, '应套用服务端返回的生效值');
+  assert.match(seg, /packs: p\.packs/, '同一分支必须保留 packs');
+});
+// ── C37: 所有 set 返回必须带 termsAck / termsPending ────────────────────
+test('C37: 每个 set 的状态重建都保留 termsAck 与 termsPending', () => {
+  const lines = client.split(/\r?\n/);
+  const bad = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (/return \{/.test(lines[i])) {
+      const block = lines.slice(i, i + 10).join(' ');
+      if (/loaded:/.test(block)) {
+        if (!/termsAck:/.test(block) || !/termsPending:/.test(block)) bad.push(i + 1);
+      }
+    }
+  }
+
+  assert.deepEqual(bad, [],
+    '这些 set 没带 termsAck/termsPending —— 组件状态是整体对象，漏字段等于重置。\n'
+    + '这是同一个坑的第三次（前两次是 advOpen、packs），所以用全量扫描而不是逐个手查。\n'
+    + '行号：' + bad.join(', '));
+});
+
+// ── C38: 下载前必须有条款确认（不能直接开始下载）───────────────────────
+test('C38: 未确认条款时点击下载要先问', () => {
+  assert.match(client, /function askTerms/,
+    '应有 askTerms 动作');
+  assert.match(client, /function ackTerms/,
+    '应有确认动作');
+  assert.match(client, /if \(!\(s\.termsAck && s\.termsAck\[p\.key\]\)\) \{ askTerms\(p\); return \}/,
+    '下载按钮必须先检查确认状态：未确认就弹面板，不能直接 addPack');
+});
+
+// ── C39: 条款确认面板必须展示署名与官方链接 ────────────────────────────
+test('C39: 确认面板展示署名 + 官方条款链接', () => {
+  assert.match(client, /下载前请先看条款/,
+    '面板要有明确标题');
+  assert.match(client, /署名要求/,
+    '要显示署名要求（VOICEVOX 音色的核心义务）');
+  assert.match(client, /官方条款：/,
+    '要给出官方条款链接');
+  assert.match(client, /下载后 zip 内也带 TERMS\.md/,
+    '要说明包内也带条款文件');
+
+  // 关键：不能只给"我已阅读"而没有链接
+  const at = client.indexOf('下载前请先看条款');
+  const seg = client.slice(at, at + 1200);
+  assert.match(seg, /termsUrl/,
+    '面板必须真的用到 termsUrl —— 否则用户没处读条款就要点确认');
+});

@@ -185,3 +185,21 @@ test('D4: 第三方声明含官方条款链接（不能只有口头说明）', (
   assert.doesNotMatch(md, /语音.{0,8}(?:MIT|CC0).{0,8}(?:发布|许可)/,
     '不得声称语音文件以 MIT/CC0 发布 —— 我们无权变更第三方素材的许可');
 });
+
+// ── D5: 重载漏报诊断必须存在（排查"没听到播报"的第一手信号）────────────
+test('D5: index.js 有重载漏报诊断', () => {
+  const INDEX = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8');
+
+  assert.match(INDEX, /EVENT_COUNTER_KEY/,
+    '应有跨实例的事件计数器（重载后新模块读不到旧变量，必须用 globalThis）');
+  assert.match(INDEX, /function bumpEventCount/,
+    '应有计数入口');
+  assert.match(INDEX, /bumpEventCount\(\)/,
+    'session/event 处理器里应真的调用它');
+  assert.match(INDEX, /重载窗口内/,
+    '重载后应打印漏报提示，否则排查时无法区分"事件没进来"和"进来了没播"');
+
+  // 计数器必须挂在 globalThis：模块级变量在重载后会重置，就失去意义
+  assert.match(INDEX, /Symbol\.for\('dsh-notify-say\.eventCount'\)/,
+    'key 应带插件名（避免与其它插件冲突）');
+});

@@ -144,9 +144,11 @@ test('G7: readLogText 在无日志时返回结构化错误', async () => {
 
 // ── G8: 路由必须是 POST（GET 可被网页触发）──────────────────────────────
 test('G8: /diagnostics 路由只接受 POST', () => {
-  const at = INDEX.indexOf("head === 'diagnostics'");
-  assert.ok(at > 0, '应有 diagnostics 路由');
-  const seg = INDEX.slice(at, at + 600);
+  // ⚠️ 注意别匹配到 isWriteRoute 里那处（v0.4.39 后 head === 'diagnostics'
+  // 同时出现在写操作判定中）。要定位到真正处理请求的分支。
+  const at = INDEX.indexOf("if (head === 'diagnostics') {");
+  assert.ok(at > 0, '应有 diagnostics 路由处理分支');
+  const seg = INDEX.slice(at, at + 800);
   assert.match(seg, /!== 'POST'/, '必须显式拒绝非 POST');
   assert.match(seg, /405/, '非 POST 应回 405');
   assert.match(seg, /allow: 'POST'/, '应告知正确方法');
