@@ -37,25 +37,43 @@ VOICEVOX 软件本体免费（含商用）。用它合成的音频可以自由�
 
 ---
 
-## 二、音效素材 — Mixkit
+## 二、音效素材 — 已全部移除（原 Mixkit）
 
-`sounds/` 目录下的 10 个梗音效（`.mp3`）来自 **Mixkit** 的免费音效库：
+**2026-10-18：移除了此前随包分发的 10 个 Mixkit mp3 音效。**
 
-- 来源：<https://mixkit.co/free-sound-effects/funny/>、
-  <https://mixkit.co/free-sound-effects/alarm/>
-- 许可：**Mixkit License**
+### 移除原因
 
-### 条款要点
+[Mixkit Sound Effects Free License](https://mixkit.co/license/modal/sfxFree/) 明确禁止：
 
-- ✅ 免费使用，**含商业用途**
-- ✅ **无需署名**
-- ❌ 不可将音频文件本身作为独立商品转卖或再分发
+> You can't **redistribute the Item on its own, as stock, in a tool or
+> template, or with source files**.
 
-完整条款：<https://mixkit.co/license/>
+本插件通过 npm / GitHub 公开分发包含这些 mp3 的安装包，属于该条款禁止的
+「再分发素材本身 / 随源文件分发」情形。
 
-具体文件与原始标题对应关系见 `sounds/README.md`。
+### 影响
+
+这些文件是**兜底池**成员：正常流程走「语音包 → master-voice.wav → mp3 池」，
+前两者都存在，所以移除**对实际体验没有影响**。
+
+### 如果你想要音效
+
+`sounds/` 目录支持直接放入 `.mp3` / `.wav`，插件会自动作为兜底音效使用。
+请自行确保所用素材的许可允许你的使用方式。
 
 ---
+
+## 二之二、未随包分发的音色（合规说明）
+
+以下音色的 WAV 由开发者本地生成，但**不进入发布包**：
+
+| 音色 | 原因 |
+|---|---|
+| **もち子さん**（mochiko） | [官方利用规约](https://vtubermochio.wixsite.com/mochizora/)明确禁止
+  「無償配布、有償販売」利用其输出合成音频制作的音声素材。本插件免费分发，正落在该禁令内。 |
+| 个人声音样本 | 作者本人的声音，仅本地使用，不对外分发。 |
+
+其余音色的发布状态见仓库 `docs/语音包分发方案-待审阅.md`。
 
 ## 三、代码参考
 
