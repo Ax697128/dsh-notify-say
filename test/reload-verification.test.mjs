@@ -32,6 +32,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 // Node 20 上会让整个测试文件加载失败（CI 首跑抓到）。
 // 改为运行时按需取，取不到就跳过相关断言。
 let _registerHooks;
+async function hasRegisterHooks() {
+  return (await getRegisterHooks()) !== null;
+}
+
 async function getRegisterHooks() {
   if (_registerHooks !== undefined) return _registerHooks;
   try {
@@ -91,7 +95,16 @@ test('R3: 代际 URL 得到新模块对象，但 fingerprint 相同（源码哈�
   assert.equal(b.fingerprint, c.fingerprint, '同理');
 });
 
-test('R4: enableFreshDependencies 让代际穿透到依赖（真实实现，非手写钩子）', async () => {
+// ⚠️ 这条依赖 `registerHooks`（Node 22.15+）。
+//
+// Node 20 上代际穿透**本来就不会生效** —— 那是运行时能力缺失，
+// 不是代码 bug。所以按能力 skip，而不是让它红。
+//
+// 注意：这里用 `{ skip: <bool|string> }` 而不是顶层 return，
+// 这样在支持的版本上它会真的跑（不能因为"某些版本不支持"就永远不测）。
+test('R4: enableFreshDependencies 让代际穿透到依赖（真实实现，非手写钩子）',
+  { skip: !(await hasRegisterHooks()) && '需要 Node 22.15+ 的 module.registerHooks' },
+  async () => {
   // ⚠️ 设计要点：必须调用**真实的** enableFreshDependencies，
   // 而不是在测试里手写一份同构的 hook。
   //

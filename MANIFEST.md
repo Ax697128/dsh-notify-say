@@ -2,7 +2,7 @@
 
 由 tools/release-build.ps1 从自用目录派生，**请勿手工编辑本目录**。
 
-- 生成时间: 2026-10-18 11:26:29
+- 生成时间: 2026-10-18 11:31:25
 - 源目录  : E:\0Deepseek\tools\plugins\dsh-notify-desktop
 - 音色策略: 只保留 'zundamon-normal'
 - 文件总数: 80
