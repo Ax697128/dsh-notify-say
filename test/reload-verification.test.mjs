@@ -104,7 +104,7 @@ test('R4: enableFreshDependencies 让代际穿透到依赖（真实实现，非�
   // ② 用被测模块自己的实现装上穿透钩子
   const { enableFreshDependencies } = await import('../lib/dev-reload.js');
   const packageUrl = pathToFileURL(dir + '\\').href;
-  enableFreshDependencies(packageUrl);
+  await enableFreshDependencies(packageUrl);   // 现在是异步注册（Node 20 兼容）
 
   // ③ 导入带代际的入口，检查依赖是否也继承了代际
   const gened = await import(entryBase + '?dns-reload=testgen-' + Date.now());

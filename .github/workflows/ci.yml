@@ -48,7 +48,10 @@ jobs:
       - name: 单元测试（纯逻辑）
         # 依赖真实 DSH 宿主的用例会自动 skip（skip 不算通过）。
         # 这里不设 DSH_CORDIS_ENTRY，所以宿主相关用例全部 skip。
-        run: npm test
+        #
+        # 用 --test-reporter=spec 让失败点直接可读（默认 reporter 在
+        # GitHub 日志里被折叠，看不清哪个断言挂了）。
+        run: node --test --test-reporter=spec
 
       - name: 单元测试（route 注入）
         run: npm run test:route
