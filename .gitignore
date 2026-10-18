@@ -1,8 +1,0 @@
-node_modules/
-*.log
-.tmp/
-tmp/
-# 增益临时文件
-dsh-gain-*.wav
-# 构建产物（含本机源码路径，不公开）
-MANIFEST.md
