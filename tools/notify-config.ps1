@@ -355,13 +355,14 @@ function Remove-VoicePack([string]$key) {
 function Show-InstallHint {
   Write-Host "=== 如何获得更多语音 ===" -ForegroundColor Cyan
   Write-Host ""
-  Write-Host "  核心包只带 1 个日语音色（约 1 MB）。完整 16 音色包约 48 MB，故不随包发布。" -ForegroundColor Gray
+  Write-Host "  核心包只带 1 个日语音色（约 1 MB）。完整多音色包体积较大，故不随包发布。" -ForegroundColor Gray
   Write-Host ""
   Write-Host "  A) 自己合成（推荐，零分发成本、可自选音色）" -ForegroundColor Green
   Write-Host "     1. 安装 VOICEVOX（本地免费 TTS 引擎，约 1 GB）"
   Write-Host "     2. 启动引擎（默认 http://127.0.0.1:50021）"
   Write-Host "     3. 跑仓库里的合成脚本："
-  Write-Host "        powershell -File <插件根>\..\..\..\tools\voicevox-build-lines.ps1"
+Write-Host "        （合成脚本尚未随包发布；音色下载功能开发中）" -ForegroundColor DarkGray
+Write-Host "        临时方案：手动在 VOICEVOX 里合成，把 wav 放进下面的 B) 目录"
   Write-Host ""
   Write-Host "  B) 从他人镜像下载（如提供）" -ForegroundColor Green
   Write-Host "     把 wav 放进 <插件根>\sounds\voice-lines\ 及子目录："
