@@ -555,12 +555,16 @@ test('C19: 高级折叠区含五种事件的音源覆盖', () => {
 // 用户 2026-10-17 要求："UI 里面没有放上热重载吗？让他选支不支持"
 test('C20: GUI 有热重载开关，且说明其风险', () => {
   const src = readClient();
-  assert.match(src, /apply\(\{ devReload: !!e\.target\.checked \}/, '应有 devReload 保存逻辑');
-  // 文案在 v0.4.54 第二阶段 UI 里从「开发：改代码后自动热重载」改成
-  // 「改代码后自动热重载（实验性）」—— 因为现在它在「开发者选项」子组里，
-  // 「开发：」前缀冗余；「实验性」比「开发」更准确地表达了风险等级。
-  // ⚠️ 改的只是措辞，下面「依赖内部结构 / 失效时只报错」的风险断言一字未动。
-  assert.match(src, /改代码后自动热重载（实验性）/, '应有开关文案');
+  // ⚠️ v0.4.57：从「自动热重载开关」改成「点一次重载一次」的按钮。
+  //
+  // 原因（2026-10-18 实测宿主崩溃）：watcher 在我改 UI 期间触发了 40 多次
+  // 失败重载，每次 dispose 都释放宿主仍在用的会话引用，最后渲染进程崩溃。
+  // 现在没有开关、没有自动触发，只有显式按钮。
+  assert.doesNotMatch(src, /apply\(\{ devReload: !!e\.target\.checked \}/,
+    '不应再有 devReload 的自动重载开关 —— 自动触发已被移除');
+  assert.match(src, /重载现在生效/, '应有一键重载按钮');
+  assert.match(src, /function doReload\(\)/, '按钮应触发一次显式重载请求');
+  assert.match(src, /cfgUrl\('reload'\)/, '重载应走 POST /reload');
   // 必须说明风险：依赖宿主内部结构、失效不影响播报
   assert.match(src, /依赖宿主内部结构/, '应说明它依赖内部结构');
   assert.match(src, /失效时只报错/, '应说明失效时的行为');

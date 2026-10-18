@@ -97,26 +97,40 @@ test('X4: 事件计数日志如实说明「非漏报数」', () => {
   //   · 重载期间没有监听器 → 事件没被观察到，missed=0（漏检）
   //   · 旧/新实例正常处理了 → 计数增加但通知已发出（误报）
   // 所以它只能叫"观察到的事件数"，不能说"漏报数"。
-  assert.match(IDX, /非漏报数/,
+  assert.match(IDX, /非漏报数|不是漏报数/,
     '日志文案必须说明这个数字不是漏报数量 —— 否则排查时会被误导');
 
   assert.doesNotMatch(IDX, /对应播报可能已丢失/,
     '不能声称"播报已丢失"—— 计数器证明不了这件事');
 });
 
-// ── X5: 监听要有源码过滤 ────────────────────────────────────────────────
-test('X5: 只有源码变更才触发重载', () => {
-  const c = code(DR);
+// ── X5: 没有任何自动触发（只能用户点击）────────────────────────────────
 
-  assert.match(c, /isSourceFile/,
-    '应有源码文件过滤 —— 否则改文档/测试也会触发一次注定失败的重载');
+test('X5: 重载只能由用户点击触发，没有 watcher', () => {
+  // v0.4.57 之前这里是「监听要有源码过滤」。
+  // 那个保障针对的是"改了文档也会触发一次注定失败的重载"。
+  //
+  // 现在设计变了：**根本没有 watcher**，所以那类问题从根上消失。
+  // 保障升级为更强的一条：不许出现任何自动触发路径。
+  //
+  // 背景（2026-10-18 宿主崩溃）：watcher 在我改 UI 期间触发了 40 多次
+  // 失败重载 —— 每次 dispose 都释放宿主仍在用的会话引用。
+  // 去掉自动触发不是"少了个功能"，而是这个崩溃的根因修复。
+  const dr = code(DR);
+  assert.doesNotMatch(dr, /fs\.watch/,
+    'dev-reload.js 不应再监听文件系统 —— 自动重载是崩溃根因');
+  assert.doesNotMatch(dr, /setInterval|setTimeout\([^)]*reload/i,
+    '不应有任何定时器驱动的重载');
 
-  // 过滤要覆盖指纹的同样范围：package.json + lib/*.js
-  const at = c.indexOf('isSourceFile');
-  const seg = c.slice(at, at + 600);
-  assert.match(seg, /package\.json/, '应包含 package.json');
-  assert.match(seg, /lib\//, '应包含 lib/ 目录');
-  assert.match(seg, /\.js/, '应限定 .js');
+  // index.js 里也不能再启动 watcher
+  assert.doesNotMatch(code(IDX), /watchPackage\(/,
+    'index.js 不应再调用 watchPackage');
+
+  // 唯一入口必须是显式路由
+  assert.match(IDX, /head === 'reload'/,
+    '重载只能经 POST /reload 触发');
+  assert.match(IDX, /toUpperCase\(\) !== 'POST'/,
+    '该路由必须只接受 POST（不可逆操作）');
 });
 
 // ── X6: 成功返回值要带 busted / verified ────────────────────────────────
@@ -137,22 +151,19 @@ test('X6: selfReload 成功时返回 busted 与 verified', () => {
 });
 
 // ── X7: watcher 必须可观测（区分"没触发"与"触发了但失败"）──────────────
-test('X7: watcher 的注册与事件都写进 notify.log', () => {
-  // 2026-10-18 我因为看错时间基准（把重启前的日志当成重启后），
-  // 误判热重载"还是坏的"。真正的教训是：
-  // **没有可观测信号时，只能靠猜。**
-  //
-  // 现在 watcher 起来会写 `[watch] watching <目录>`，
-  // 收到事件会写 `[watch] event <文件> accepted=<bool>`。
-  // 这样"没触发"和"触发了但失败"一眼可分。
-  assert.match(DR, /opts\.diag\?\.\('watching '/,
-    '应能观测到 watcher 注册成功');
-  assert.match(DR, /opts\.diag\?\.\('event '/,
-    '应能观测到收到文件事件（含是否被源码过滤接受）');
+test('X7: 每次重载尝试的结果都写进 notify.log', () => {
+  // 原本这里断言 watcher 的 `[watch] watching/event` 可观测信号。
+  // watcher 删除后，需要同样的可观测性 —— 改到**重载结果**上：
+  // 成功与失败都必须落进日志文件，否则"点了没反应"无法排查。
+  assert.match(IDX, /\[reload\] OK by-user/,
+    '成功要写日志（带 by-user 标记，与旧的自动重载区分）');
+  assert.match(IDX, /\[reload\] FAILED/,
+    '失败也要写日志，并留下原因');
 
-  // diag 必须接到真正的日志文件，而不是只进 console
-  assert.match(IDX, /diag:\s*\([^)]*\)\s*=>\s*appendNotifyLog/,
-    'diag 必须写进 notify.log —— 只进 console 的话我们看不到');
-  assert.match(IDX, /\[watch\]/,
-    '日志前缀应是 [watch]');
+  // 必须落文件，不能只进 console
+  const okAt = IDX.indexOf('[reload] OK by-user');
+  assert.ok(okAt > 0, '应能定位成功日志');
+  const seg = IDX.slice(Math.max(0, okAt - 400), okAt + 80);
+  assert.match(seg, /appendNotifyLog/,
+    '日志必须走 appendNotifyLog（写文件），只进 console 我们看不到');
 });
