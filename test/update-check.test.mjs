@@ -116,13 +116,18 @@ test('U5: fetch 抛异常时返回结构化错误，不抛出', async () => {
 
 // ── U6: 缓存 24 小时，force 可绕过 ──────────────────────────────────────
 test('U6: 宿主侧缓存 24 小时，force 绕过', async () => {
-  const { checkForUpdate, AUTO_CHECK_TTL_MS } = await import('../lib/update-check.js');
+  const { checkForUpdate, AUTO_CHECK_TTL_MS, NPM_REGISTRY_URL } = await import('../lib/update-check.js');
   const cache = { at: 0, result: null };
 
+  // ⚠️ 现在一次检查会**并行查两个源**（npm + GitHub），所以不能用总请求数
+  // 衡量"查了几次"。只数 npm 那个请求 —— 每次检查恰好发一次。
   let calls = 0;
-  const fake = async () => {
-    calls++;
-    return { ok: true, json: async () => ({ 'dist-tags': { latest: '0.4.99' } }) };
+  const fake = async (url) => {
+    if (url === NPM_REGISTRY_URL) calls++;
+    if (url === NPM_REGISTRY_URL) {
+      return { ok: true, json: async () => ({ 'dist-tags': { latest: '0.4.99' } }) };
+    }
+    return { ok: true, json: async () => ({ version: '0.4.99' }) };
   };
 
   const t0 = 1_700_000_000_000;
@@ -240,4 +245,114 @@ test('U11: 版本信息用独立 useState（避开 25 处 set 的字段遗漏坑
   const mainState = CLIENT.slice(stAt, stEnd);
   assert.doesNotMatch(mainState, /^\s*version:/m,
     '版本字段不该塞进主 state');
+});
+
+// ── U12: hasUpdate 的方向必须正确（本地旧→true，本地新→false）──────────
+test('U12: hasUpdate 方向 —— 只在远端更新时为 true', async () => {
+  // ⚠️ 2026-10-18 实测抓到的真 bug：第一版写成 `cmp < 0`，**方向反了**。
+  //
+  // 表现：本地 0.4.48、npm 还在暂存队列里是 0.4.47 ——
+  // 界面却显示"有新版"。也就是 npm 落后时装作有新版本，
+  // npm 超前时反而不提示。
+  //
+  // 这个 bug 能溜过去，是因为 U1 只测了 compareVersions 本身，
+  // 没有任何用例断言 hasUpdate 的**方向**。所以补上。
+  const { checkForUpdate } = await import('../lib/update-check.js');
+
+  const tmp = join(ROOT, '.tmp-u12-' + Math.random().toString(36).slice(2, 8));
+  try {
+    mkdirSync(tmp, { recursive: true });
+
+    // ① 远端更新（0.9.9 > 0.4.48）→ 有新版
+    writeFileSync(join(tmp, 'package.json'), JSON.stringify({ version: '0.4.48' }));
+    const newer = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.9.9' } }) });
+    const r1 = await checkForUpdate({ pluginRoot: tmp, force: true, fetchImpl: newer });
+    assert.equal(r1.hasUpdate, true,
+      '远端 0.9.9 > 本地 0.4.48，必须提示有新版');
+
+    // ② 远端落后（npm 暂存队列期间会这样）→ 不能提示有新版
+    const older = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.4.40' } }) });
+    const r2 = await checkForUpdate({ pluginRoot: tmp, force: true, fetchImpl: older });
+    assert.equal(r2.hasUpdate, false,
+      '远端 0.4.40 < 本地 0.4.48，**不能**提示有新版 —— '
+      + 'npm 暂存队列期间就会出现这种"远端落后"，提示更新会让用户困惑');
+
+    // ③ 相同版本 → 无新版
+    const same = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.4.48' } }) });
+    const r3 = await checkForUpdate({ pluginRoot: tmp, force: true, fetchImpl: same });
+    assert.equal(r3.hasUpdate, false, '版本相同不应提示更新');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+// ── U13: 两个源都查，取较高版本（npm 暂存队列期间不能漏更新）────────────
+test('U13: 并行查两个源，取较高版本', async () => {
+  // 实测场景（2026-10-18）：npm 有暂存队列，发布后 latest 会落后一阵。
+  //   npm latest   = 0.4.47
+  //   GitHub main  = 0.4.48
+  // 若"先 npm、失败才回退 GitHub"，这期间**所有人都看不到 0.4.48 可用**，
+  // 而 GitHub 安装的用户本来就是以 main 为准的。
+  //
+  // 所以并行查两个源、取较高版本。两个源都是同一套发布流程的正式产物。
+  const { checkForUpdate, NPM_REGISTRY_URL, GITHUB_RAW_PKG_URL } =
+    await import('../lib/update-check.js');
+
+  const tmp = join(ROOT, '.tmp-u13-' + Math.random().toString(36).slice(2, 8));
+  try {
+    mkdirSync(tmp, { recursive: true });
+    writeFileSync(join(tmp, 'package.json'), JSON.stringify({ version: '0.4.47' }));
+
+    const seen = [];
+    // npm 落后、GitHub 较新
+    const fake = async (url) => {
+      seen.push(url);
+      if (url === NPM_REGISTRY_URL) {
+        return { ok: true, json: async () => ({ 'dist-tags': { latest: '0.4.47' } }) };
+      }
+      if (url === GITHUB_RAW_PKG_URL) {
+        return { ok: true, json: async () => ({ version: '0.4.48' }) };
+      }
+      return { ok: false, status: 404 };
+    };
+
+    const r = await checkForUpdate({ pluginRoot: tmp, force: true, fetchImpl: fake });
+
+    assert.equal(r.ok, true);
+    assert.equal(r.latest, '0.4.48',
+      'npm 落后时应采信 GitHub 的更高版本 —— 否则用户永远等不到更新提示');
+    assert.equal(r.hasUpdate, true, '0.4.48 > 0.4.47，应有新版');
+    assert.match(r.source, /github/,
+      'source 应标明采用了 GitHub 的版本');
+
+    // 两个源都要真的查过（不是串行等待）
+    assert.ok(seen.includes(NPM_REGISTRY_URL), '应查 npm');
+    assert.ok(seen.includes(GITHUB_RAW_PKG_URL), '应查 GitHub');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ── U14: 反向 —— 本地较新时不提示（npm 超前也不会误报）──────────────────
+test('U14: 两个源都落后于本地时不提示更新', async () => {
+  const { checkForUpdate, NPM_REGISTRY_URL, GITHUB_RAW_PKG_URL } =
+    await import('../lib/update-check.js');
+
+  const tmp = join(ROOT, '.tmp-u14-' + Math.random().toString(36).slice(2, 8));
+  try {
+    mkdirSync(tmp, { recursive: true });
+    writeFileSync(join(tmp, 'package.json'), JSON.stringify({ version: '0.5.0' }));
+
+    const fake = async (url) => {
+      if (url === NPM_REGISTRY_URL) {
+        return { ok: true, json: async () => ({ 'dist-tags': { latest: '0.4.40' } }) };
+      }
+      return { ok: true, json: async () => ({ version: '0.4.48' }) };
+    };
+
+    const r = await checkForUpdate({ pluginRoot: tmp, force: true, fetchImpl: fake });
+    assert.equal(r.latest, '0.4.48', '取较高的那个（0.4.48 > 0.4.40）');
+    assert.equal(r.hasUpdate, false, '两个源都低于本地 0.5.0，不该提示更新');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
