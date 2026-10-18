@@ -203,3 +203,84 @@ test('D5: index.js 有重载漏报诊断', () => {
   assert.match(INDEX, /Symbol\.for\('dsh-notify-say\.eventCount'\)/,
     'key 应带插件名（避免与其它插件冲突）');
 });
+// ── D6: 打包不得带临时/备份文件（fail-closed）──────────────────────────
+test('D6: release-build 有垃圾文件闸（.bak/.tmp 不得进发布包）', () => {
+  // ⚠️ 2026-10-18 真实事故：我把 mutation 测试用的
+  // `lib/dev-reload.js.bak` 忘在源码目录里，release-build 把它一起
+  // 复制进发布包 —— **而且已经推到 GitHub 与 npm**。
+  //
+  // 内容无害，但发布物里出现 .bak 是明显疏漏：用户疑惑、包体积白涨、
+  // 而且说明打包流程没检查"目录里有没有残留"。
+  //
+  // 所以加一道 fail-closed 的闸：宁可中止构建，也不发带垃圾的包。
+  const rb = readFileSync(join(ROOT, 'tools', 'release-build.ps1'), 'utf8');
+
+  assert.match(rb, /junkPattern/,
+    '应有垃圾文件模式定义');
+  assert.match(rb, /\.\(bak\|tmp\|orig\|rej\|swp\)/,
+    '应覆盖常见编辑器/工具残留（.bak/.tmp/.orig/.rej/.swp）');
+  assert.match(rb, /exit 1/,
+    '发现垃圾文件必须中止构建（fail-closed），不能只警告');
+
+  // 闸门要在"复制完成之后"才有效 —— 检查位置在 CHANGELOG 之前
+  const guardAt = rb.indexOf('$junkPattern');
+  const clAt = rb.indexOf('生成 CHANGELOG');
+  assert.ok(guardAt > 0 && clAt > 0 && guardAt < clAt,
+    '垃圾闸应在复制完成后、写 CHANGELOG 之前');
+});
+
+// ── D7: CHANGELOG 过滤器必须挡住内部内容 ────────────────────────────────
+test('D7: CHANGELOG 生成器过滤内部标记与 hash', () => {
+  // 公开仓库只有 release: vX.Y.Z 快照，外部看不到每次改了什么。
+  // 但**也不能原样输出开发提交标题** —— 实测早期标题是内部笔记风格：
+  //   · CARD：#7849 跟进评论回写
+  //   · RECOVERY.md 救援说明（三级回滚…）
+  //   · deploy-snapshots/desktop-profile-pre-...
+  //   · a306b8d / b9d83e1（私有仓库 hash）
+  const rb = readFileSync(join(ROOT, 'tools', 'release-build.ps1'), 'utf8');
+
+  assert.match(rb, /publicTypes/,
+    '应只保留面向使用者的提交类型');
+  for (const t of ['feat', 'fix', 'perf', 'refactor']) {
+    assert.match(rb, new RegExp(`'${t}'`), `publicTypes 应含 ${t}`);
+  }
+  // docs/test/chore/ci 是内部维护，不应出现在公开变更记录里
+  assert.doesNotMatch(rb, /publicTypes = @\([^)]*'(docs|test|chore|ci)'/,
+    'docs/test/chore/ci 不应算面向使用者的类型');
+
+  assert.match(rb, /internalMarkers/,
+    '应有内部标记黑名单');
+  for (const m of ['CARD', 'RECOVERY', '交接备忘', 'deploy-snapshots']) {
+    assert.ok(rb.includes(m),
+      `internalMarkers 应含 ${m} —— 实测这些标记会带出内部资料引用`);
+  }
+
+  assert.match(rb, /0-9a-f\]\{7,40\}/,
+    '应剥掉 7~40 位十六进制串（私有仓库 hash 在公开仓库里指不到东西）');
+});
+
+// ── D8: CHANGELOG.md 必须在 npm 的 files 白名单里 ───────────────────────
+test('D8: CHANGELOG.md 随包分发，且内部资料不随包', () => {
+  // ⚠️ 注意：**源 package.json 与发布包 package.json 是两份不同的东西**。
+  //
+  // 源的 `files` 服务于本地 link 安装（甚至列了 CARD.md / RECOVERY.md）；
+  // 发布包的 `files` 由 release-build.ps1 重写 —— 那才是 npm 用户拿到的。
+  //（我第一版拿源 package.json 去断言，是搞错了对象。）
+  const rb = readFileSync(join(ROOT, 'tools', 'release-build.ps1'), 'utf8');
+
+  // 1) CHANGELOG.md 必须进发布包的 files（否则 npm 用户看不到变更记录）
+  assert.match(rb, /'CHANGELOG\.md',/,
+    'CHANGELOG.md 必须出现在 release-build 写出的 files 数组里 —— '
+    + '同类事故：THIRD-PARTY-NOTICES.md 曾漏了 files，导致 npm 包没有任何第三方声明');
+
+  // 2) 内部资料不得进发布包的 files
+  const filesBlock = rb.slice(rb.indexOf('files'), rb.indexOf('keywords'));
+  for (const internal of ['CARD.md', 'RECOVERY.md']) {
+    assert.ok(!filesBlock.includes(internal),
+      `${internal} 是内部资料，不得出现在发布包的 files 里`);
+  }
+
+  // 3) 它必须真的被"生成"出来，而不是靠复制
+  assert.match(rb, /WriteAllText\(\(Join-Path \$Destination 'CHANGELOG\.md'\)/,
+    'CHANGELOG.md 应由构建脚本生成到目标目录（不是从源码目录复制）');
+});
