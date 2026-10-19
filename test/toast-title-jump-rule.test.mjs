@@ -99,21 +99,31 @@ test('T9: consume 取走整个队列并清空，同时保留旧字段', () => {
 });
 
 // ══ T10-T12：规则选择 ═══════════════════════════════════════════════════
-test('T10: pickJumpTarget 三种规则 + 单会话不受规则影响', () => {
+test('T10: pickJumpTarget 规则 + 单会话不受规则影响', () => {
   const fn = grab(CLIENT, 'function pickJumpTarget(list, rule) {', '\n    }\n');
   assert.match(fn, /if \(list\.length === 1\) return list\[0\]/, '单会话必须直接返回它');
   assert.match(fn, /if \(rule === 'none'\) return null/, 'none 返回 null');
   assert.match(fn, /if \(rule === 'latest'\) return sorted\[sorted\.length - 1\]/, 'latest 取末尾');
-  assert.match(fn, /return sorted\[0\]/, '默认（含未知规则）取最早');
+  assert.match(fn, /return sorted\[0\]/, 'earliest 取最早（也是 clicked 没命中时的兜底）');
 });
 
-test('T11: 默认规则是 earliest（服务端与客户端一致）', () => {
-  assert.match(SCHEMA, /multiJumpRule: 'earliest'/, 'FIELD_DEFAULTS 必须是 earliest');
+test('T11: 默认规则是 clicked（点哪个跳哪个）', () => {
+  // v0.4.70：默认从 earliest 改为 clicked —— 多会话时用户点的是具体某个 Toast，
+  // 按时间排序猜必然猜错。clicked 用 Toast 自带的 session id，精确。
+  assert.match(SCHEMA, /multiJumpRule: 'clicked'/, 'FIELD_DEFAULTS 必须是 clicked');
   // ⚠️ schemastery 没有 z.enum，必须是 union+const（踩坑：z.enum 直接 TypeError）
-  assert.match(SCHEMA, /\.union\(\[z\.const\('earliest'\), z\.const\('latest'\), z\.const\('none'\)\]\)/, '三值用 union+const');
+  assert.match(SCHEMA, /\.union\(\[z\.const\('clicked'\), z\.const\('earliest'\), z\.const\('latest'\), z\.const\('none'\)\]\)/, '四值用 union+const');
   assert.doesNotMatch(SCHEMA, /z\.enum\(/, 'schemastery 不支持 z.enum');
-  assert.match(CLIENT, /typeof v\.multiJumpRule === 'string' \? v\.multiJumpRule : 'earliest'/, '客户端兜底也得是 earliest');
-  assert.match(CLIENT, /var curRule = typeof v\.multiJumpRule === 'string' \? v\.multiJumpRule : 'earliest'/, 'GUI 兜底也得是 earliest');
+  assert.match(CLIENT, /var curRule = typeof v\.multiJumpRule === 'string' \? v\.multiJumpRule : 'clicked'/, 'GUI 兜底也得是 clicked');
+});
+
+test('T11b: clicked 必须排在选项第一位（默认项）', () => {
+  const m = CLIENT.match(/var JUMP_RULES = \[([\s\S]*?)\]/);
+  assert.ok(m, '要有 JUMP_RULES');
+  assert.match(m[1], /\['clicked'/, 'clicked 要出现在选项里');
+  // 第一位 = 默认选中项
+  const first = m[1].match(/\['([a-z]+)'/);
+  assert.equal(first[1], 'clicked', 'clicked 必须在第一位');
 });
 
 test('T12: 客户端能同时吃新队列和旧单条响应', () => {
@@ -129,4 +139,30 @@ test('T13: multiJumpRule 在 schema/store/index 三处白名单与透传都在',
   }
   assert.match(store, /multiJumpRule: cfg\.multiJumpRule,/, 'config-store 透传');
   assert.match(INDEX, /multiJumpRule: g\.multiJumpRule,/, 'effectiveForClient 透传');
+});
+
+// ══ v0.4.71：前台点 Toast 也要跳 ════════════════════════════════════════
+test('T14: 必须有 tryTopJump（不依赖 visibilitychange）', () => {
+  // 用户 2026-10-19 指出：窗口一直在前台时点 Toast，visibilitychange 不触发，
+  // 于是跳不过去。而"在前台点 Toast 直接过去看结果"恰恰是最省事的用法。
+  assert.match(CLIENT, /function tryTopJump\(\)/, '要有前台跳转入口');
+  const m = CLIENT.match(/function tryTopJump\(\)([\s\S]{0,900})/);
+  assert.ok(m, '能读到函数体');
+  assert.match(m[1], /fetchPendingJump\(\)/, '要读 pending-jump');
+  assert.match(m[1], /openSession\(/, '要真的跳');
+  assert.match(m[1], /lastTopJumpCheck/, '要有节流，避免 focus 抖动打爆请求');
+});
+
+test('T15: focus 与 mousedown 监听都要注册且要能移除', () => {
+  assert.match(CLIENT, /addEventListener\('focus', tryTopJump\)/, 'window focus 要监听');
+  assert.match(CLIENT, /addEventListener\('mousedown', tryTopJump/, 'document mousedown 要监听');
+  // 闭环：卸载时必须移除，否则热重载会叠监听
+  assert.match(CLIENT, /removeEventListener\('focus', tryTopJump\)/, '卸载要移除 focus');
+  assert.match(CLIENT, /removeEventListener\('mousedown', tryTopJump\)/, '卸载要移除 mousedown');
+});
+
+test('T16: 前台跳转必须有 120 秒过期保护', () => {
+  const m = CLIENT.match(/function tryTopJump\(\)([\s\S]{0,900})/);
+  assert.ok(m);
+  assert.match(m[1], /120000/, '超过 120 秒的点击不该跳（避免久等后突然跳走）');
 });

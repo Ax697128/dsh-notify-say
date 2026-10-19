@@ -35,7 +35,15 @@ export async function load(url, context, nextLoad) {
           unref() { return this; },
         };
       }
-      export default { spawn };
+      // v0.4.70：插件新增 execFileSync（注册自定义协议时同步调 PowerShell）。
+      // 桩里也要提供，否则 import { execFileSync } 会在模块链接阶段报
+      // "does not provide an export named execFileSync"。同样只记录、不起进程。
+      export function execFileSync(file, args, options) {
+        globalThis.__SPAWN_CALLS = globalThis.__SPAWN_CALLS || [];
+        globalThis.__SPAWN_CALLS.push({ file, args: Array.isArray(args) ? args.slice() : args, options, sync: true });
+        return Buffer.from('');
+      }
+      export default { spawn, execFileSync };
     `;
     return { format: 'module', shortCircuit: true, source };
   }

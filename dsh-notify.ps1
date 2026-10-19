@@ -61,6 +61,11 @@ param(
   # 为什么需要：日志会写进 %TEMP%，用户提 Issue 时经常直接上传。
   # 标题与正文可能含项目名、人名，对诊断「为什么不响」却没帮助。
   [ValidateSet('info', 'debug')]
+    # v0.4.70：会话 id。传了它且插件已完成协议注册时，Toast 的 launch 会写成
+    #   dshnotify://jump?session=<id>
+    # 这样点 Toast 能**精确**跳到对应会话（多会话时不会跳错）。
+    # 不传（或插件协议没注册成功）时仍用 dsh://open，行为与以前一致。
+    [string]$SessionId = '',
   [string]$LogLevel = 'info',
   # v0.4.16：数字增益倍数（1.0 = 原样；2.0 = 放大一倍）。
   #
@@ -338,7 +343,19 @@ if ($SoundOnly -or $Preview) {
     $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
     $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-    $xml.LoadXml("<toast activationType=`"protocol`" launch=`"dsh://open`"><visual><binding template=`"ToastGeneric`"><text>$titleXml</text><text>$bodyXml</text>$detailXml</binding></visual></toast>")
+      # v0.4.70：launch 按「是否拿到会话 id」决定。
+      #
+      # 为什么用自有协议：dsh://open 是 DSH 本体硬编码的精确匹配，**加参数连窗口都不拉**。
+      # dshnotify://jump?session=<id> 由插件的 jump-handler.ps1 处理，能精确识别会话；
+      # 它内部再调 dsh://open 复用官方唤窗，所以窗口该起还是会起。
+      #
+      # 会话 id 白名单校验：只接受字母数字/下划线/连字符，杜绝把怪字符拼进 XML。
+      $toastLaunch = 'dsh://open'
+      if ($SessionId -and ($SessionId -match '^[A-Za-z0-9_-]{4,128}$')) {
+        $toastLaunch = 'dshnotify://jump?session=' + $SessionId
+      }
+      $launchXml = (& $xmlEscape $toastLaunch)
+      $xml.LoadXml("<toast activationType=`"protocol`" launch=`"$launchXml`"><visual><binding template=`"ToastGeneric`"><text>$titleXml</text><text>$bodyXml</text>$detailXml</binding></visual></toast>")
     $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
     # 2026-09-25 样式统一：改用官方壳注册的 AUMID（Get-StartApps 实证 com.deepseek.dsh
     # 注册为 "DeepSeek Harness"）→ 来源名与角标自动随壳；失败回退借用身份，保证通知不丢。
