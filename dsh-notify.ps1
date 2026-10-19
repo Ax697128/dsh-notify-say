@@ -31,6 +31,10 @@
 param(
   [string]$Title = "DSH 任务提醒",
   [string]$Body = "任务可能已完成，回来看看？",
+  # v0.4.62：Toast 第三行（弱化的补充信息，例如项目名）。
+  # 空 = 不显示第三行（模板保持两行）。由 Node 侧决定要不要传 ——
+  # 只在"标题里没包含这个信息"时才传，避免重复占版面。
+  [string]$Detail = "",
   [switch]$NoSound,
   [switch]$Preview,
   [switch]$SoundOnly,
@@ -319,8 +323,11 @@ function Write-NotifyLog([string]$KindTag, [string]$Extra, [string]$Detail) {
 # 2026-09-25 样式统一：发通知身份改用官方壳 AUMID com.deepseek.dsh（来源名 "DeepSeek Harness"、
 # 角标随壳图标）；备选未采用：desktop\assets\icon.png 做 appLogoOverride 角标（旧 ps1 2026-09-03 做法）。
 $xmlEscape = { param([string]$s) ([string]$s).Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;').Replace('"', '&quot;').Replace("'", '&apos;') }
-$titleXml = & $xmlEscape $Title
-$bodyXml = & $xmlEscape $Body
+  $titleXml = & $xmlEscape $Title
+  $bodyXml = & $xmlEscape $Body
+  # 第三行按需拼接：没有 -Detail 就不加 <text>，模板还是两行。
+  $detailXml = ""
+  if ($Detail -ne "") { $detailXml = "<text>" + (& $xmlEscape $Detail) + "</text>" }
 
 if ($SoundOnly -or $Preview) {
   # 视觉另有消费方（或试听）：只播声音，不弹 Toast
@@ -331,7 +338,7 @@ if ($SoundOnly -or $Preview) {
     $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
     $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-    $xml.LoadXml("<toast activationType=`"protocol`" launch=`"dsh://open`"><visual><binding template=`"ToastGeneric`"><text>$titleXml</text><text>$bodyXml</text></binding></visual></toast>")
+    $xml.LoadXml("<toast activationType=`"protocol`" launch=`"dsh://open`"><visual><binding template=`"ToastGeneric`"><text>$titleXml</text><text>$bodyXml</text>$detailXml</binding></visual></toast>")
     $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
     # 2026-09-25 样式统一：改用官方壳注册的 AUMID（Get-StartApps 实证 com.deepseek.dsh
     # 注册为 "DeepSeek Harness"）→ 来源名与角标自动随壳；失败回退借用身份，保证通知不丢。

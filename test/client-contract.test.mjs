@@ -27,30 +27,37 @@ const NOTIFY_CONFIG = join(ROOT, 'tools', 'notify-config.ps1');
 
 const client = readFileSync(CLIENT, 'utf8');
 
-// ── C27: consumeLastSession 必须返回对象（不是裸字符串）──────────────────
-test('C27: consumeLastSession 返回 {sessionId, at} 对象而非裸字符串', () => {
+// ── C27: consumeLastSession 必须返回**队列**（v0.4.62；元素仍是对象而非裸字符串）──
+test('C27: consumeLastSession 返回 [{sessionId, at}] 队列而非裸字符串', () => {
   const fn = client.match(/function consumeLastSession\(\)[\s\S]*?\n    \}/);
   assert.ok(fn, '应能找到 consumeLastSession 定义');
   const body = fn[0];
 
-  // 必须返回对象字面量
-  assert.match(body, /return\s*\{[\s\S]*sessionId:/,
-    'consumeLastSession 必须返回含 sessionId 的对象；'
-    + '返回裸字符串会让调用方的 doc.sessionId 恒为 undefined（2026-10-18 实际 bug）');
+  // v0.4.62：返回值是数组，但每个元素仍必须是 {sessionId, at} 对象。
+  // 沿用原防线：元素绝不能是裸字符串（那会让 target.sessionId 恒 undefined，
+  // 2026-10-18 真实 bug）。
+  assert.match(body, /list\.push\(\{ sessionId: [\s\S]*?at: /,
+    '元素必须是 {sessionId, at} 对象；裸字符串会让 target.sessionId 恒为 undefined');
+  assert.doesNotMatch(body, /list\.push\(\s*(e\.sessionId|doc\.sessionId)\s*\)/,
+    '不得把裸 id 塞进队列');
 
-  // 不得再有 `return doc.sessionId`（裸字符串返回）
-  assert.doesNotMatch(body, /return\s+doc\.sessionId\s*$/m,
-    '不得返回裸字符串 doc.sessionId');
+  // 必须同时吃新队列与旧单条响应（升级中途两端可能一新一旧）
+  assert.match(body, /doc\.sessions/, '要优先读新字段 sessions');
+  assert.match(body, /typeof doc\.sessionId === \'string\'/, '旧形状 sessionId 也要吃');
 });
 
 // ── C28: 调用方与返回形状必须一致（防单边修改）──────────────────────────
-test('C28: 调用方按对象访问 sessionId（与 C27 形状一致）', () => {
-  const call = client.match(/consumeLastSession\(\)\.then\(function \(doc\) \{[\s\S]{0,400}/);
-  assert.ok(call, '应能找到调用点');
-  assert.match(call[0], /doc\.sessionId/,
-    '调用方应访问 doc.sessionId —— 每边都应跟着另一边改');
-  assert.match(call[0], /!doc \|\| !doc\.sessionId/,
-    '应保留空值短路判断');
+test('C28: 调用方按队列消费，并按规则挑出 target 再跳', () => {
+  const call = client.match(/consumeLastSession\(\)\.then\(function \(list\) \{[\s\S]{0,700}/);
+  assert.ok(call, '应能找到调用点，且参数名应为 list（形状变了就得改名，防误用）');
+
+  // 空值短路必须还在 —— 没有待跳转就不该继续
+  assert.match(call[0], /if \(!list \|\| !list\.length\) return/, '应保留空值短路');
+
+  // v0.4.62：必须经 pickJumpTarget 挑目标，不能直接拿 list 当单个会话用
+  assert.match(call[0], /pickJumpTarget\(list, en\.multiJumpRule\)/,
+    '必须按 multiJumpRule 挑目标；直接跳 list 会让「多个会话」规则形同不存在');
+  assert.match(call[0], /target\.sessionId/, 'shouldJump 要用挑出来的 target');
 });
 
 // ── C29: jumpEnabled 必须"读不到配置就不跳" ─────────────────────────────
