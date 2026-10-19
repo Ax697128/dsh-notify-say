@@ -7,6 +7,10 @@
 
 只支持 **Windows**。
 
+![设置页](docs/screenshots/settings-tts.png)
+
+> 设置页实拍（声音来源 = 系统语音合成）。语音包、提醒规则、高级区见下文。
+
 ---
 
 ## 目录
