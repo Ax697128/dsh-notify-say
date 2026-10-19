@@ -134,9 +134,18 @@ test('T12: 客户端能同时吃新队列和旧单条响应', () => {
 // ══ T13：配置透传链路 ══════════════════════════════════════════════════
 test('T13: multiJumpRule 在 schema/store/index 三处白名单与透传都在', () => {
   const store = readFileSync(join(ROOT, 'lib/config-store.js'), 'utf8');
-  for (const [name, src] of [['config-store', store], ['index', INDEX]]) {
-    assert.match(src, /jumpWhenForeground', 'multiJumpRule'/, name + ' 白名单');
-  }
+
+  // v0.4.71 修正：multiJumpRule 之前被**错放进 BOOL_KEYS**（那是给 boolean 用的），
+  // sanitize 会按 boolean 校验并丢弃它 —— 保存设置时静默失效。
+  // 现在它必须在 RULES 里以「字符串枚举」的形式校验。
+  assert.doesNotMatch(store, /BOOL_KEYS[\s\S]{0,400}'multiJumpRule'/,
+    'multiJumpRule 不能出现在 BOOL_KEYS 里（它是字符串，不是 boolean）');
+  assert.match(store, /multiJumpRule: \(v\) => \(\['clicked', 'earliest', 'latest', 'none'\]\.includes\(v\)/,
+    'config-store 必须在 RULES 里按枚举校验 multiJumpRule');
+
+  // index.js 的 sanitize 白名单（normalizeConfig）仍要有它
+  assert.match(INDEX, /'jumpWhenForeground', 'multiJumpRule'/, 'index 白名单');
+
   assert.match(store, /multiJumpRule: cfg\.multiJumpRule,/, 'config-store 透传');
   assert.match(INDEX, /multiJumpRule: g\.multiJumpRule,/, 'effectiveForClient 透传');
 });
