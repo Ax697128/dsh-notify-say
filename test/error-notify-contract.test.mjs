@@ -152,3 +152,35 @@ test('P14: spawnTts 要透传 psKind（TTS 失败也要能定位）', () => {
   const body = fnBody('function spawnTts(args, psKind) {');
   assert.match(body, /spawnNotify\(args, psKind\)/, 'spawnTts 必须透传 psKind');
 });
+// ══ 第 3 批：error 当场播报（2026-10-19 真机排查的根因）══════════════════
+test('P15: error / blocked 必须在 turn/end 当场播，不等 idle 边沿', () => {
+  const idx = INDEX.indexOf("if (type === 'turn/end') {");
+  assert.ok(idx > 0, '要有 turn/end 处理');
+  const seg = INDEX.slice(idx, idx + 2200);
+  // 必须有 error/blocked 的立即播报分支
+  assert.match(seg, /endKind === 'error' \|\| endKind === 'blocked'/,
+    '必须有 error/blocked 的当场播报分支');
+  // 该分支必须 return（不能落下去写 lastTurnEnd，否则 idle 路径会再播一次）
+  const branch = seg.slice(seg.indexOf("endKind === 'error'"));
+  assert.match(branch, /return;/, '当场播后必须 return，避免走到 lastTurnEnd 记账');
+});
+
+test('P16: 数据依据 —— 不得因"怕重复"而把 error 也走记账路径', () => {
+  // 2026-10-19 实测 2195 个会话 / 6262 条 turn/end：
+  //   同一 turn 多条 turn/end = 0，同一 turn 多种 kind = 0
+  // 所以不存在"提前播会重复"的问题。
+  const idx = INDEX.indexOf("if (type === 'turn/end') {");
+  const seg = INDEX.slice(idx, idx + 2200);
+  assert.match(seg, /error .* 当场播报|当场播报，不等 idle|error \/ blocked → 当场播/,
+    '代码里应保留这条判断的依据说明，防止后人又改回"等 idle"');
+});
+
+test('P17: 子代理错误要有独立开关（默认开）', () => {
+  assert.match(INDEX, /notifyOnSubagentError/,
+    '子代理错误要能单独控制：不打扰于子代理完成，但不能静默子代理错误');
+  // 默认值定义在 config-schema.js（FIELD_DEFAULTS），不在 index.js
+  const SCHEMA = readFileSync(join(ROOT, 'lib/config-schema.js'), 'utf8');
+  const m = SCHEMA.match(/notifyOnSubagentError:\s*(true|false)/);
+  assert.ok(m, 'config-schema.js 里要有默认值');
+  assert.equal(m[1], 'true', '默认必须开 —— 错误不该被静默');
+});
