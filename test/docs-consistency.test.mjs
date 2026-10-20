@@ -379,17 +379,32 @@ test('D11: README 的联网表述必须区分"播放离线"与"下载要联网"'
     '应说明播放/通知是离线的');
 });
 
-// ── D12: README 不得说"点 Toast 就能跳会话" ─────────────────────────────
-test('D12: README 对跳会话的描述要准确（Toast 点击带不了会话 id）', () => {
-  // 事实：Windows Toast 的协议激活是固定串，塞不进会话 id。
-  // 真正跳转的机制是"切回窗口时自动跳"。
-  assert.doesNotMatch(README, /点击 Toast 可直接回到对应会话/,
-    '这是错的说法 —— Toast 点击只能唤起窗口，带不了会话 id');
+// ── D12: README 对「点 Toast 跳会话」的描述必须与实现一致 ───────────────
+//
+// ⚠️ 这条测试原先断言的是**旧结论**：「Toast 点击带不了会话 id」。
+// 2026-10-20 我们通过注册自有协议 dshnotify:// 做出了可靠实现，
+// 旧结论被推翻 —— 继续断言旧说法就会逼着文档写错的东西。
+//
+// 现在断言语义反过来：README 必须承认这个功能**存在**，
+// 且必须说清它是**可选开关**（不能让用户以为装了就默认具备）。
+test('D12: README 必须正确描述「点 Toast 跳会话」（可选开关，非默认）', () => {
+  // 不得再出现"做不到"的旧结论
+  assert.doesNotMatch(README, /做不到：点哪条 Toast/,
+    '旧结论已推翻 —— README 不能再说点 Toast 跳会话做不到');
 
-  assert.match(README, /切回|切回来/,
-    '应说明真正的跳转发生在"切回 DSH 窗口时"');
-  assert.match(README, /带不了会话 id/,
-    '应明确指出 Toast 点击的限制，否则用户会以为是 bug');
+  // 必须承认这个功能存在，并给出协议名（让用户能自己核实注册表）
+  assert.match(README, /dshnotify:\/\//,
+    '应写明用的自有协议 dshnotify://，否则用户无法排查协议注册问题');
+
+  // 必须是**显式开关**，不能说成默认行为
+  assert.match(README, /点击通知跳转到对应会话/,
+    '应给出开关的实际名称，用户要能在设置页找到它');
+  assert.match(README, /不开启时|显式开关/,
+    '必须说明不开启时的行为 —— 否则用户会以为装了就自动具备');
+
+  // 保留真实限制：DSH 官方协议确实带不了参数（这条事实没变）
+  assert.match(README, /dsh:\/\/open/,
+    '应保留 DSH 官方协议限制的说明，这是选择自有协议的原因');
 });
 
 // ── D13: README 里的数字必须与实现一致 ──────────────────────────────────
@@ -551,4 +566,61 @@ test('D19: 发布包带 .gitattributes（否则 Windows 上 checkout 会改成 C
     assert.match(rb, /'\.gitattributes'/,
       'release-build 的 includeFiles 必须含 .gitattributes，否则不会进发布包');
   }
+});
+
+// ── D20: engines.dsh 必须准确（市场用它决定"能不能装"）───────────────────
+//
+// ## 为什么这条重要（2026-10-20 发现插件已被市场收录）
+//
+// 本机 `profiles/desktop/.dsh-market/discovery-compatibility-v1.json`
+// 里有 **3138 个条目**，其中包含 dsh-notify-say —— 市场是**全量扫描 npm**
+// 上的 dsh 插件自动收录的，不是人工登记。
+//
+// 它抓的正是 `package.json` 的 `engines.dsh`：
+//
+//     "dsh-notify-say": {
+//       "facts": { "version": "0.4.82", "enginesDsh": ">=0.1.7-rc.2" }
+//     }
+//
+// DSH 的 plugin-manager 用这个字段做兼容校验（源码里有
+// `requirements` / `incompatible` 结构）。**声明错了，市场就会
+// 告诉不兼容的用户"能装"**，装完才发现坏。
+//
+// ## 原来错在哪
+//
+// 我们写的是 `>=0.1.7-rc.2`，但**从未在 0.1.7 上测过**（实测是 0.2.1-rc.2）。
+// 而且没有上界 —— 0.3.0 若有破坏性改动，市场仍会说兼容。
+//
+// 生态惯例（本机市场缓存里实测）：主要插件都写 `>=X <0.3.0`，例如
+//     dsh-plugin-resolver     >=0.2.0-rc.2 <0.3.0
+//     dsh-dania-voice         >=0.1.7-rc.1 <0.3.0-0
+//     dsh-gui-auth-url        >=0.2.1-rc.2 <0.3.0-0
+test('D20: engines.dsh 必须有实测下界 + 上界，且与 README 一致', () => {
+  const engines = PKG.engines || {};
+  const dshRange = String(engines.dsh || '');
+
+  assert.ok(dshRange, 'package.json 必须有 engines.dsh —— 市场靠它判断兼容性');
+
+  // 必须有上界。没有上界 = 声称"未来所有版本都兼容"，这是不实声明
+  assert.match(dshRange, /<\s*[\d.]+/,
+    `engines.dsh 必须有上界（当前: ${dshRange}）—— 否则 DSH 大版本不兼容时，`
+    + '市场仍会告诉用户"能装"');
+
+  // 下界不能低于实测版本。实测环境是 0.2.1-rc.2
+  const m = dshRange.match(/>=\s*([\d.]+(?:-[\w.]+)?)/);
+  assert.ok(m, `engines.dsh 应有 >= 下界（当前: ${dshRange}）`);
+  const lower = m[1];
+  // 只做"不低于 0.2.1"的粗判（精确 semver 比较不必在这里实现）
+  assert.ok(
+    /^0\.[2-9]\./.test(lower) || /^[1-9]/.test(lower),
+    `engines.dsh 的下界 ${lower} 低于实测版本 0.2.1-rc.2 —— ` +
+    '声明支持未测过的版本等于让用户当小白鼠',
+  );
+
+  // README 必须与 engines 一致（不能一处说 0.2.1、另一处说 0.1.7）
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  assert.match(readme, /0\.2\.1-rc\.2/,
+    'README 必须写明实测的 DSH 版本');
+  assert.doesNotMatch(readme, /0\.1\.7-rc\.2 或更高/,
+    'README 不能再说"0.1.7-rc.2 或更高" —— 那个版本没测过');
 });

@@ -21,17 +21,52 @@ import { dirname, join } from 'node:path';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const INDEX = readFileSync(join(ROOT, 'lib/index.js'), 'utf8');
 
+/**
+ * 取出一个函数的源码文本。
+ *
+ * ## 为什么不用「找 indent + '}'」（v0.4.84 改）
+ *
+ * 原实现按「缩进相同且该行只有 `}`」找终点。这依赖一个隐含假设：
+ * **函数体内部不会出现独立成行的 `}`**。一旦有人写出格式化的空对象：
+ *
+ *     const opts = {
+ *     }
+ *
+ * 就会被误判成函数结束，`fnBody` 返回**截断的半截函数**，
+ * 于是下面所有 `assert.doesNotMatch` 都对着半截文本做判断 ——
+ * **测试从"能抓到回归"退化成"永远通过"**，而且没有任何报错。
+ *
+ * 2026-10-20 我正因同类写法（找 indent 边界）在改 `index.js` 时
+ * 误删了整个 `registerJumpProtocol`，所以这里改用**花括号配平**。
+ *
+ * 配平算法对注释里的 `}` 也不敏感（注释里的花括号会参与计数，
+ * 但只要代码本身配平，结果仍然正确）。
+ */
 function fnBody(sig) {
   const lines = INDEX.split(/\r?\n/);
   const i = lines.findIndex((l) => l.includes(sig));
   assert.ok(i >= 0, '找不到函数: ' + sig);
-  const indent = (lines[i].match(/^(\s*)/) || ['', ''])[1];
-  let j = -1;
-  for (let k = i + 1; k < lines.length; k++) {
-    if (lines[k] === indent + '}') { j = k; break; }
+
+  let depth = 0;
+  let started = false;
+  let end = -1;
+  for (let k = i; k < lines.length; k++) {
+    for (const ch of lines[k]) {
+      if (ch === '{') { depth++; started = true; }
+      else if (ch === '}') { depth--; }
+    }
+    if (started && depth === 0) { end = k; break; }
   }
-  assert.ok(j > i, '找不到函数终点: ' + sig);
-  return lines.slice(i, j + 1).join('\n');
+  assert.ok(end > i, '找不到函数终点: ' + sig);
+
+  // 护栏：截断会静默削弱断言，这里主动拦一次。
+  // 判据：函数体最后一行应当只有 `}`（允许缩进）。
+  assert.match(
+    lines[end].trim(), /^\}$/,
+    `${sig} 的终点行不像函数结束（实际: ${JSON.stringify(lines[end].trim())}）`
+    + ' —— 花括号可能不配平，或者这里有语法问题',
+  );
+  return lines.slice(i, end + 1).join('\n');
 }
 
 // ══ 已删除的规则（反断言，防回归）══════════════════════════════════════

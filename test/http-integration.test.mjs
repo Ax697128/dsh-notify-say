@@ -265,6 +265,49 @@ test('E7: index.js 的 isWriteRoute 判据与集成测试一致', async () => {
     'index.js 必须用同一个 guard 调用形状');
 });
 
+// ── E9: guard 必须在所有端点之前（v0.4.83 安全修复的回归门）──────────────
+//
+// ## 为什么必须有这条
+//
+// 2026-10-20 真机实测发现：`/log` 与 `/pending-jump` 两个端点的处理代码
+// 写在 `checkLocalOrigin()` **之前**，且各自 `return`，于是完全绕过了来源检查。
+// 跨站网页一个 POST 就能让 DSH 自动跳到攻击者指定的会话（已复现：
+// `[jump-click] ... from=https://evil.example.com` 后 1 秒就 openSession）。
+//
+// 这类缺陷的可怕之处：**安全检查确实写了、也确实是对的，只是位置错了**。
+// 读代码时看到 `checkLocalOrigin` 在那里，很容易以为"有防护"。
+// 所以这个测试断言的不是"guard 存在"，而是 **guard 在端点之前**。
+//
+// 注意：上面的集成测试用的是**复制**出来的分流逻辑（见文件头注释），
+// 因此它无法发现真实 index.js 里的顺序错误 —— 这条必须直接读源码。
+test('E9: guard 必须出现在 log / pending-jump 端点之前', () => {
+  const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8');
+
+  const guardAt = src.indexOf('checkLocalOrigin(req, { write: isWriteRoute })');
+  assert.ok(guardAt > 0, '找不到 guard 调用 —— 源码结构变了，请更新本测试');
+
+  // 两个曾被绕过 guard 的端点
+  const logAt = src.indexOf("if (head === 'log') {");
+  const jumpAt = src.indexOf("if (head === 'pending-jump') {");
+
+  assert.ok(logAt > 0, "找不到 /log 端点");
+  assert.ok(jumpAt > 0, "找不到 /pending-jump 端点");
+
+  assert.ok(guardAt < logAt,
+    `guard 必须在 /log 之前（实际 guard@${guardAt} > log@${logAt}）—— `
+    + '顺序错了就等于没有防护，跨站网页可刷日志');
+  assert.ok(guardAt < jumpAt,
+    `guard 必须在 /pending-jump 之前（实际 guard@${guardAt} > jump@${jumpAt}）—— `
+    + '顺序错了跨站网页可让 DSH 跳到任意会话');
+
+  // 反向断言：整段里不能再有第二个 guard（重复声明会 SyntaxError，
+  // 但"两处 guard 都在端点之后"这种半吊子状态也要拦住）
+  const guardCount = (src.match(/const guard = checkLocalOrigin\(/g) || []).length;
+  assert.equal(guardCount, 1,
+    `guard 只能声明一次（实际 ${guardCount} 次）—— 多处声明说明分流结构已经乱了`);
+});
+
 // ── E8: config-route 超限回 413 而不是断连 ──────────────────────────────
 test('E8: 超过 64 KB 的请求体得到 413（连接未被重置）', async () => {
   const srv = await startServer();
@@ -281,4 +324,37 @@ test('E8: 超过 64 KB 的请求体得到 413（连接未被重置）', async ()
   } finally {
     await srv.close();
   }
+});
+
+// ── E10: pending-jump 的「写」判定必须区分方法 ──────────────────────────
+//
+// ## 为什么必须有这条
+//
+// 2026-10-20 修 CSRF（E9）时，我把 `pending-jump` 整体标成写路由，
+// 结果 **GET 也被要求带 JSON content-type**，前端读取直接 403 —— 
+// 跳转链路当场断掉。当时的现象是：
+//     [jump-click]  有 ✓
+//     [jump-consume] 没有 ✗
+// 差别就在于 GET 不带 content-type 而 POST 带。
+//
+// 教训：「写操作」不是**路由**的属性，而是**方法 + 路由**的属性。
+// 这条测试断言 index.js 里 pending-jump 的写判定确实带了方法条件。
+test('E10: pending-jump 只有 POST 才算写路由（GET 必须可读）', () => {
+  const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8');
+
+  // 必须出现「pending-jump 且是 POST」的复合条件
+  assert.match(
+    src,
+    /head === 'pending-jump'\s*&&\s*reqMethod === 'POST'/,
+    'pending-jump 的写判定必须限定 POST —— 否则前端 GET 读取会被 '
+    + '「写操作需 JSON」拦成 403，跳转链路断掉（实测踩过）',
+  );
+
+  // 反向断言：不能再有裸的 `head === 'pending-jump'`（无方法条件）
+  const bare = /head === 'pending-jump'\s*(?:$|\n\s*(?:\|\||;))/m;
+  assert.ok(
+    !bare.test(src),
+    "发现没有方法限定的 head === 'pending-jump' 分支 —— 这会把 GET 也当写操作",
+  );
 });

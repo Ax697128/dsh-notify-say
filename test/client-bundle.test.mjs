@@ -681,3 +681,43 @@ test('C26: 子设置用 kind<Param><Kind> 命名，与白名单一致', () => {
   // 必须用 suffix 拼，而不是写死某个事件
   assert.match(src, /var kKey = function \(base\) \{ return base \+ suffix \}/, '键名应由前缀 + 事件后缀拼成');
 });
+
+// ── C27: 设置页必须暴露精准跳转开关 ───────────────────────────────────────
+//
+// ## 为什么要有这条
+//
+// 2026-10-20 发布前审查发现：`toastJumpSession`（点哪条 Toast 跳哪条会话）
+// 从 v0.4.70 就实现了，但**设置页里没有开关** —— 普通用户只能改配置文件
+// 才能启用。而 README 写着「设置页 → 通知 → 打开它」，文档与实现不一致。
+//
+// 一个功能"做了但用户开不了"，等于没做。
+test('C27: 设置页必须提供「点击通知跳到对应会话」开关', () => {
+  const src = readClient();
+
+  // 开关本体：能读也能写这个配置键
+  assert.match(src, /checked:\s*v\.toastJumpSession === true/,
+    '设置页必须有读取 toastJumpSession 的 checkbox');
+  assert.match(src, /apply\(\{ toastJumpSession: !!/,
+    '勾选后必须能保存 toastJumpSession');
+
+  // 文案：用户要能看懂"这是点了才跳，和自动跳不是一回事"
+  assert.match(src, /点击通知跳到对应会话/, '开关要有中文标签');
+  assert.match(src, /点了才跳|你点了才跳/, '文案必须说明这是"点了才跳"');
+
+  // 必须告知会注册 Windows 协议（有人会介意）
+  assert.match(src, /dshnotify:\/\//, '文案必须提到会注册 dshnotify:// 协议');
+  assert.match(src, /关掉时自动清理|关掉.*清理/, '文案必须说明关掉会清理');
+
+  // 开启后必须提示"自动跳暂时不生效"，否则用户调下面的开关没反应会以为坏了
+  assert.match(src, /下面两个自动跳开关暂时不生效/,
+    '开启精准跳转时必须提示自动跳已被接管');
+
+  // 反向断言：不能残留"点通知才跳做不到"这类过时结论作陈述
+  const stale = src.split('\n').filter(
+    (l) => l.includes('点通知才跳') && l.includes('做不到')
+      && !l.includes('更正') && !l.includes('过时'),
+  );
+  assert.equal(stale.length, 0,
+    '设置页注释里还留着"点通知才跳做不到"的旧结论（未标注更正）');
+});
+
