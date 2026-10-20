@@ -61,12 +61,18 @@ param(
   # 为什么需要：日志会写进 %TEMP%，用户提 Issue 时经常直接上传。
   # 标题与正文可能含项目名、人名，对诊断「为什么不响」却没帮助。
   [ValidateSet('info', 'debug')]
-    # v0.4.70：会话 id。传了它且插件已完成协议注册时，Toast 的 launch 会写成
-    #   dshnotify://jump?session=<id>
-    # 这样点 Toast 能**精确**跳到对应会话（多会话时不会跳错）。
-    # 不传（或插件协议没注册成功）时仍用 dsh://open，行为与以前一致。
-    [string]$SessionId = '',
   [string]$LogLevel = 'info',
+  # v0.4.70：会话 id。传了它且插件已完成协议注册时，Toast 的 launch 会写成
+  #   dshnotify://jump?session=<id>
+  # 这样点 Toast 能**精确**跳到对应会话（多会话时不会跳错）。
+  # 不传（或插件协议没注册成功）时仍用 dsh://open，行为与以前一致。
+  #
+  # ⚠️ 2026-10-20 踩坑：这个参数曾被插到 `[ValidateSet('info','debug')]` 与
+  # `[string]$LogLevel` 之间，于是 ValidateSet 套在了 SessionId 上 ——
+  # 任何带 -SessionId 的调用都报「xxx 不属于 ValidateSet 集合 info,debug」，
+  # exit=1、播报彻底失败（只听到 fallback 的蜂鸣）。
+  # **新参数一律加在 param 块最末尾，不要插在两个相关参数中间。**
+  [string]$SessionId = '',
   # v0.4.16：数字增益倍数（1.0 = 原样；2.0 = 放大一倍）。
   #
   # 为什么需要：实测本包 247 个语音包峰值中位仅 **40.4%**

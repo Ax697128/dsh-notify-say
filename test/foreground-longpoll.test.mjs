@@ -85,7 +85,11 @@ test('W8: 轮询不每轮打 /config（用缓存）', () => {
 
 test('W9: 开关关着时定时探活，打开后无需刷新页面', () => {
   assert.match(CLIENT, /IDLE_RECHECK_MS/, '要有探活间隔');
-  const seg = CLIENT.slice(CLIENT.indexOf('if (!en || !en.jumpWhenForeground)'), CLIENT.indexOf('var hidden =', CLIENT.indexOf('if (!en || !en.jumpWhenForeground)')));
+  // v0.4.75：条件里多了一个 `en.toastJumpSession`（精准跳转开启时不挂自动跳连接），
+  // 所以定位用的字符串要跟着改 —— 但断言的语义不变：
+  // 「不该挂连接」的情况下必须定时回来复查，不能直接 return。
+  const anchor = 'en.toastJumpSession) {';
+  const seg = CLIENT.slice(CLIENT.indexOf(anchor), CLIENT.indexOf('var hidden =', CLIENT.indexOf(anchor)));
   assert.match(seg, /setTimeout/, '关着时必须定时回来看，不能直接 return 掉');
   assert.match(CLIENT, /dsh-notify-say:config-changed/,
     'GUI 保存后要广播事件作废缓存，否则改了开关要刷新页面才生效');
