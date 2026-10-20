@@ -66,6 +66,28 @@ test('P4: 试听应用 voiceGain（调增益后能听出差别）', () => {
   assert.match(seg, /voiceGain/, '应从配置读 voiceGain');
 });
 
+// ── P4b: 试听必须带上「当前选中的音色」（v0.4.87 修复）────────────────────
+//
+// 为什么单列一条：P4 只保住了 -Gain，于是「试听放的不是我选的音色」
+// 这个 bug 在 8 条断言全绿的情况下溜到了实拍现场（2026-10-20）。
+//
+// 现象：用户在界面选「九州そら」，点试听，ps1 日志是
+//   [preview] -Voice  pick=manbetsu-hanamaru-genki-extra-2.wav
+// —— -Voice 后面是空的，ps1 于是按随机池挑曲。根因是试听走
+// baseNotifyArgs()，而音色参数当时只在 notifyArgs() 里加。
+test('P4b: 试听把当前音色传给 ps1（-Voice / -Mode）', () => {
+  const start = HOST.indexOf("head === 'preview'");
+  const seg = HOST.slice(start, start + 6000);
+  // 必须真的把 voiceName / voiceMode 读出来并用上
+  assert.match(seg, /kindVoiceName/, '试听应从配置读音色名（含按事件覆盖）');
+  assert.match(seg, /kindVoiceMode/, '试听应从配置读音色模式（fixed/random）');
+  assert.match(seg, /'-Voice'/, "试听必须向 ps1 传 -Voice，否则放的是随机曲");
+  assert.match(seg, /'-Mode'/, "试听必须向 ps1 传 -Mode（random 模式用）");
+  // 反向断言：不能「读了配置却没传给 ps1」
+  const bundledSeg = seg.slice(seg.indexOf("src === 'bundled'"));
+  assert.match(bundledSeg, /'-Voice'/, 'bundled 试听分支必须传 -Voice');
+});
+
 // ── P5: client 必须有试听按钮 ───────────────────────────────────────────
 test('P5: GUI 提供试听按钮', () => {
   assert.match(CLIENT, /function previewSound\(/, 'client 应有 previewSound 函数');
