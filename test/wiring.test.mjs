@@ -1,5 +1,5 @@
 /**
- * dsh-notify-desktop 空闲门「事件接线」集成测试。
+ * dsh-notify-say 空闲门「事件接线」集成测试。
  *
  * 与 idle-gate.test.mjs 的分工：那边测**纯函数**的判定逻辑；这边测 apply() 的
  * **事件接线与挂起状态机**——即"主会话 idle 时若有子代理在跑，到底有没有挂起"。
@@ -8,13 +8,13 @@
  * POWERSHELL_EXE 无效 → spawn 只会异步 emit 'error'（不启动任何进程、不播声音）。
  * 测试的观测量是插件的 console 日志（挂起/未挂起），不是 Toast 本身。
  *
- * 运行：node --test tools/plugins/dsh-notify-desktop/test/
+ * 运行：node --test tools/plugins/dsh-notify-say/test/
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // ⚠️ 必须在 import lib/index.js **之前**把 DSH_HOME 指到空目录。
 //
-// 插件启动时会读 `$DSH_HOME/storages/dsh-notify-desktop/config.json` 作为
+// 插件启动时会读 `$DSH_HOME/storages/dsh-notify-say/config.json` 作为
 // 「运行时覆盖层」，其优先级**高于** apply() 传入的 config。若用真实 DSH_HOME，
 // 用户只要在 GUI 里改过任何一项（实测：把 notifyOnAborted 打开），
 // 那些假定默认值的用例就会红——那是用户配置导致的，不是代码缺陷。

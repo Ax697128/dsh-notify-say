@@ -1,5 +1,5 @@
 /**
- * dsh-notify-desktop「运行时路由」测试 —— v0.3.1。
+ * dsh-notify-say「运行时路由」测试 —— v0.3.1。
  *
  * 与另外两个测试文件的分工：
  *  - `fail-voice.test.mjs`：真跑 ps1，验**池选择**与语义护栏（但用的是自己传的 -Kind）。
@@ -34,7 +34,7 @@ const PLUGIN = join(HERE, '..');
 
 // ⚠️ 必须在 import lib/index.js **之前**把 DSH_HOME 指到空目录。
 //
-// 为什么：插件启动时会读 `$DSH_HOME/storages/dsh-notify-desktop/config.json`
+// 为什么：插件启动时会读 `$DSH_HOME/storages/dsh-notify-say/config.json`
 // 作为"运行时覆盖层"，其优先级**高于** apply() 传入的 config。
 // 如果测试用真实 DSH_HOME，用户只要在 GUI 里改过任何一项
 // （实测：把 notifyOnAborted 打开），R4「aborted 默认不播」就会失败——

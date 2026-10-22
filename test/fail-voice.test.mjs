@@ -1,5 +1,5 @@
 /**
- * dsh-notify-desktop 失败语音（fail 池）测试 —— v0.3.1。
+ * dsh-notify-say 失败语音（fail 池）测试 —— v0.3.1。
  *
  * 覆盖两处：
  *  A. lib/index.js：error 分支必须走 psKind='fail'；blocked 必须仍是 'chime'
@@ -24,7 +24,7 @@
  * **不断言"是否真的出声"**——后者在 worktree 里必假失败，是环境限制非代码缺陷。
  * 真机播放已在短路径（模拟部署）下人工验证通过。
  *
- * 运行：node --test tools/plugins/dsh-notify-desktop/test/
+ * 运行：node --test tools/plugins/dsh-notify-say/test/
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

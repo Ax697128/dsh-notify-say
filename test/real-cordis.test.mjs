@@ -1,5 +1,5 @@
 /**
- * dsh-notify-desktop 空闲门「真实 Cordis 接线」测试。
+ * dsh-notify-say 空闲门「真实 Cordis 接线」测试。
  *
  * 为什么需要这个文件（补 wiring.test.mjs 的洞）：
  * `wiring.test.mjs` 用的是**自造 ctx 替身**，它的 `get(name)` 忽略第二个参数——
@@ -13,7 +13,7 @@
  *  - 真实 `ctx.on(..., { global: true })` 是否能注册成功。
  * 只把**外部副作用**（spawn 子进程）隔离掉：SystemRoot 指向不存在路径。
  *
- * 运行：node --test tools/plugins/dsh-notify-desktop/test/
+ * 运行：node --test tools/plugins/dsh-notify-say/test/
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,7 +21,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 // ⚠️ 必须在 import lib/index.js **之前**把 DSH_HOME 指到空目录。
 //
-// 插件启动时会读 `$DSH_HOME/storages/dsh-notify-desktop/config.json` 作为
+// 插件启动时会读 `$DSH_HOME/storages/dsh-notify-say/config.json` 作为
 // 「运行时覆盖层」，其优先级**高于** apply() 传入的 config。若用真实 DSH_HOME，
 // 用户只要在 GUI 里改过任何一项（实测：把 notifyOnAborted 打开），
 // 那些假定默认值的用例就会红——那是用户配置导致的，不是代码缺陷。

@@ -1,5 +1,5 @@
 /**
- * dsh-notify-desktop 空闲门（idle gate）单元测试。
+ * dsh-notify-say 空闲门（idle gate）单元测试。
  *
  * 覆盖 v0.3.0 引入的三个纯函数与关键判定：
  *  - reasonKindOf：turn/end 的 reason.kind 取值（对象 / 字符串 / 缺失）
@@ -9,7 +9,7 @@
  * 为什么这些断言是 exact 而非宽松：判定协议（空闲门）的语义漂移会让"误报完成"
  * 这个原始缺陷复发，而宽松断言会把漂移伪装成绿灯。故每条都断言精确结果。
  *
- * 运行：node --test tools/plugins/dsh-notify-desktop/test/idle-gate.test.mjs
+ * 运行：node --test tools/plugins/dsh-notify-say/test/idle-gate.test.mjs
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

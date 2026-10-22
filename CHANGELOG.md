@@ -297,3 +297,9 @@
 - feat(notify): 空闲门——子代理/后台任务在跑时不再误报「任务完成」
 - feat(notify): v0.3.1 失败语音——error 回合播日语道歉语音
 
+## 未发布
+
+- fix(config): $DSH_HOME 缺失时回落到 ~/.dsh（修复「保存失败：no-home」）
+- refactor: 插件目录与安装名统一为 dsh-notify-say（旧名 dsh-notify-desktop 退役）
+- fix(build): 目录改名后 CHANGELOG 生成器要跟到旧路径的历史
+

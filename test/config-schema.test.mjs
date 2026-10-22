@@ -25,7 +25,10 @@ import {
   safeHome, loadSchema, buildConfig, readConfig, FIELD_DEFAULTS,
 } from '../lib/config-schema.js';
 
-const HAS_HOME = typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.length > 0;
+// 有效 home 的判据必须与生产代码一致：**空白视为未设置**（官方 resolveRoot 同口径）。
+// 历史写法只判 length > 0，于是 DSH_HOME='   ' 被当成"有 home"，
+// 但那时 safeHome 会拼出相对路径 —— 现在它回落到 ~/.dsh，S1 自然应当跳过。
+const HAS_HOME = typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.trim().length > 0;
 
 // ── S1: 能解析到 schemastery ────────────────────────────────────────────────
 test('S1: 从 $DSH_HOME 侧能解析 @deepseek-ai/schemastery',
@@ -36,9 +39,12 @@ test('S1: 从 $DSH_HOME 侧能解析 @deepseek-ai/schemastery',
   });
 
 // ── S2: 每个字段都必须 volatile（官方硬契约）────────────────────────────────
-test('S2: 每个字段都带 volatile 标记（漏一个设置页就报废）', () => {
+// ⚠️ 降级时必须 `t.skip()` 而**不是** `if (!z) return`：
+// 后者会让本测试在"拿不到 schemastery"的机器上**静默通过**（绿但什么都没断言），
+// 于是 volatile 硬契约在用户环境里其实从未被验证过。跳过要能被看见。
+test('S2: 每个字段都带 volatile 标记（漏一个设置页就报废）', (t) => {
   const z = loadSchema(process.env);
-  if (!z) return; // 降级环境跳过（S5/S6 覆盖降级本身）
+  if (!z) return t.skip('本机解析不到 schemastery（无可用 DSH home），S2 无法验证 volatile 契约');
   const Config = buildConfig(z);
   const dict = Config.dict;
   assert.ok(dict, 'schema 应有 dict');
@@ -54,9 +60,9 @@ test('S2: 每个字段都带 volatile 标记（漏一个设置页就报废）', 
 });
 
 // ── S3: 默认值与取值 ────────────────────────────────────────────────────────
-test('S3: 默认值正确，readConfig 能从 schemastery ref 取值', () => {
+test('S3: 默认值正确，readConfig 能从 schemastery ref 取值', (t) => {
   const z = loadSchema(process.env);
-  if (!z) return;
+  if (!z) return t.skip('本机解析不到 schemastery，S3 无法验证默认值');
   const Config = buildConfig(z);
   const inst = Config({});
   const vals = readConfig(inst);
@@ -71,9 +77,9 @@ test('S3: 默认值正确，readConfig 能从 schemastery ref 取值', () => {
 });
 
 // ── S4: 越界值被拒 ──────────────────────────────────────────────────────────
-test('S4: volume 越界被 schema 拒绝（0-100）', () => {
+test('S4: volume 越界被 schema 拒绝（0-100）', (t) => {
   const z = loadSchema(process.env);
-  if (!z) return;
+  if (!z) return t.skip('本机解析不到 schemastery，S4 无法验证越界拒绝');
   const Config = buildConfig(z);
   assert.throws(() => Config({ volume: 101 }), /volume|100/, 'volume=101 应被拒');
   assert.throws(() => Config({ volume: -1 }), /volume|0/, 'volume=-1 应被拒');
@@ -82,14 +88,24 @@ test('S4: volume 越界被 schema 拒绝（0-100）', () => {
   assert.equal(readConfig(Config({ volume: 100 })).volume, 100);
 });
 
-// ── S5: 降级 —— 没有 $DSH_HOME ──────────────────────────────────────────────
-test('S5: $DSH_HOME 缺失时 loadSchema 安全返回 null（不抛）', () => {
+// ── S5: 降级 —— 解析不到任何可用 home ──────────────────────────────────────
+test('S5: 解析不到 DSH home 时 loadSchema 安全返回 null（不抛）', () => {
+  // 注意：v0.4.88 起「没有 $DSH_HOME」**不再**等于「没有 home」——
+  // safeHome 会回落到 ~/.dsh。所以这里改为断言回落后的行为，而不是断言空串。
   assert.doesNotThrow(() => {
     const z = loadSchema({});
-    assert.equal(z, null, '没有 $DSH_HOME 时应返回 null 而不是抛异常');
+    // 回落目录存在于本机时，可能真解析到 schemastery；不存在则是 null。
+    // 两种都不是错误 —— 关键是"不抛异常"，且返回值只有这两种形状。
+    //
+    // ⚠️ 判据必须是 z 真的**长得像 schemastery**（有 .object 方法），
+    // 不能写 `typeof z === 'object'`：那对 null 也成立，是恒真断言。
+    assert.ok(z === null || (z && typeof z.object === 'function'),
+      'loadSchema 只能返回 null 或带 .object 的 schemastery 实例');
   });
-  assert.equal(safeHome({}), '');
-  assert.equal(safeHome({ DSH_HOME: '' }), '');
+  // 关键回归：home 不再因为环境变量缺失而变成空串（那会让保存全线 no-home）
+  assert.notEqual(safeHome({}), '', '没有 DSH_HOME 时也必须能解析出 home（回落 ~/.dsh）');
+  assert.notEqual(safeHome({ DSH_HOME: '' }), '', '空串同样要回落');
+  assert.notEqual(safeHome({ DSH_HOME: '   ' }), '', '纯空白同样要回落');
 });
 
 // ── S6: 降级 —— $DSH_HOME 指向不存在的地方 ──────────────────────────────────

@@ -30,7 +30,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyProtocolOwner, planProtocolSync } from '../lib/protocol-ownership.js';
 
-const ROOT = 'E:\\0Deepseek\\tools\\plugins\\dsh-notify-desktop';
+const ROOT = 'E:\\0Deepseek\\tools\\plugins\\dsh-notify-say';
 
 /** 拼一条"像我们写的"注册命令。 */
 const ourCmd = (handler) =>

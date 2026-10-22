@@ -119,12 +119,34 @@ $pluginRoot = Split-Path -Parent $scriptPath
 $notifyPs1 = Join-Path $pluginRoot 'dsh-notify.ps1'
 
 function Get-DshHome {
+  # 与 lib/dsh-home.js 同口径：$DSH_HOME（空白视为未设置）→ ~/.dsh。
+  # ⚠️ 这里**不得**硬编码任何安装路径。曾写死过 'D:\Program Files (x86)\DSH'，
+  # 那是某台开发机的安装位置；换到用户机器上会指向不存在的目录，
+  # 脚本于是静默读写错误位置 —— 比直接报错更难排查。
+  #
+  # 失败时返回空串（与 JS 侧 resolveDshHome 一致），由调用方给出明确错误，
+  # 而不是在这里抛 ParameterBindingValidationException —— 那种栈对用户毫无用处。
   $h = $env:DSH_HOME
-  if (-not $h) { $h = 'D:\Program Files (x86)\DSH' }   # 本机默认，仅作兜底
-  return $h.TrimEnd('\', '/')
+  if ($h) { $h = $h.Trim() }
+  if (-not $h) {
+    # $HOME 可能为空（极简环境 / 被清过的会话）；Join-Path 传空值会直接抛异常
+    $homeDir = $HOME
+    if (-not $homeDir) { $homeDir = $env:USERPROFILE }
+    if (-not $homeDir) { return '' }
+    try { $h = Join-Path $homeDir '.dsh' } catch { return '' }
+  }
+  if (-not $h) { return '' }
+  # 只裁**多余**的尾部斜杠：'/' 或 '\' 本身就是根，裁成空串会让后面拼出相对路径。
+  $trimmed = $h.TrimEnd('\', '/')
+  if (-not $trimmed) { return $h }   # 原来是纯根路径，原样返回
+  return $trimmed
 }
 
 $dshHome = Get-DshHome
+if (-not $dshHome) {
+  Write-Error '无法解析 DSH home（$DSH_HOME 与 ~/.dsh 均不可用），无法定位配置文件。'
+  exit 1
+}
 $configDir = Join-Path $dshHome 'storages\dsh-notify-say'
 $configPath = Join-Path $configDir 'config.json'
 
