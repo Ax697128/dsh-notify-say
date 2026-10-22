@@ -5,7 +5,7 @@
 .DESCRIPTION
   当用户点击 Toast 时，Windows 会调起本脚本并传入完整 URL：
 
-      dshnotify://jump?session=session-abc12345
+      dshnotify-say://jump?session=session-abc12345
 
   本脚本做两件事：
     1. 把 sessionId 写到插件的 /pending-jump 端点（前端据此精确跳转）
@@ -15,7 +15,7 @@
   "dsh://open" 和 "dsh://open/"），无法携带参数；自有协议才能精确知道
   「用户点的是哪个会话」。多会话同时有通知时，这点是决定性的。
 
-  安全：只接受 dshnotify://jump?session=<id> 形态，session 必须匹配
+  安全：只接受 dshnotify-say://jump?session=<id> 形态，session 必须匹配
   字母数字/下划线/连字符（4-128 位）；不合法就静默退出，不执行其它内容。
 
   注意：本文件必须带 UTF-8 BOM —— 否则 PowerShell 5.1 会把中文读成
@@ -31,7 +31,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 # ── 1. 解析并校验 URL ─────────────────────────────────────────────────────
 if ([string]::IsNullOrWhiteSpace($Url)) { exit 0 }
 
-$m = [regex]::Match($Url, '^dshnotify://jump/?(?:\?(.*))?$', 'IgnoreCase')
+$m = [regex]::Match($Url, '^dshnotify-say://jump/?(?:\?(.*))?$', 'IgnoreCase')
 if (-not $m.Success) { exit 0 }
 
 $query = $m.Groups[1].Value

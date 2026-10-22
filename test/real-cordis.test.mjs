@@ -35,6 +35,11 @@ process.on('exit', () => { try { rmSync(ISOLATED_HOME, { recursive: true, force:
 // 必须在 import 插件之前设置：插件模块顶层读 SystemRoot 算 POWERSHELL_EXE。
 process.env.SystemRoot = 'Z:\\__no_such_root__';
 
+// ⚠️ 显式关闭注册表访问（v0.5.0 起必须，理由见 wiring.test.mjs 同处注释）：
+// apply() 会跑 cleanupLegacyProtocols()，那是会 Remove-Item 历史 dshnotify 键的
+// 真实写操作。不能只靠 SystemRoot 桩"顺带"保护用户注册表。
+process.env.DSH_NOTIFY_NO_REGISTRY = '1';
+
 const { apply } = await import('../lib/index.js');
 
 /**

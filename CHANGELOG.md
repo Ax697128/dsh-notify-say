@@ -3,6 +3,17 @@
 > 本文件由 `tools/release-build.ps1` 从开发提交自动生成，**请勿手工编辑**。
 > 只列面向使用者的变更（新增功能与修复），不含内部维护提交。
 
+## v0.5.0 — 2026-10-22
+
+- fix(protocol): 协议改名 dshnotify-say + 归属判据改用身份标记（v0.5.0）
+
+## v0.4.89 — 2026-10-22
+
+- fix(config): $DSH_HOME 缺失时回落到 ~/.dsh（修复「保存失败：no-home」）
+- refactor: 插件目录与安装名统一为 dsh-notify-say（旧名 dsh-notify-desktop 退役）
+- fix(build): 目录改名后 CHANGELOG 生成器要跟到旧路径的历史
+- feat(diagnostics): 诊断文件补上 home 解析来源与实际配置路径（v0.4.89）
+
 ## v0.4.87 — 2026-10-20
 
 - fix(preview): v0.4.87 —— 试听放的不是你选的音色
@@ -296,10 +307,4 @@
 
 - feat(notify): 空闲门——子代理/后台任务在跑时不再误报「任务完成」
 - feat(notify): v0.3.1 失败语音——error 回合播日语道歉语音
-
-## 未发布
-
-- fix(config): $DSH_HOME 缺失时回落到 ~/.dsh（修复「保存失败：no-home」）
-- refactor: 插件目录与安装名统一为 dsh-notify-say（旧名 dsh-notify-desktop 退役）
-- fix(build): 目录改名后 CHANGELOG 生成器要跟到旧路径的历史
 

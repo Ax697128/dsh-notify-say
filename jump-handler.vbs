@@ -18,14 +18,19 @@
 '
 ' ## 它做什么
 '
-'   ① 解析 dshnotify://jump?session=<id>
+'   ① 解析 dshnotify-say://jump?session=<id>
 '   ② 找插件端口（port.txt，或扫描能响应 /version 的端口）
 '   ③ POST /api/dsh-notify-say/pending-jump（带 Origin 头，过 http-guard）
 '   ④ 调 dsh://open 把 DSH 唤到前台（用 Run 的第二参数 0 = 隐藏窗口）
 '
 ' ## 安全
 '
-'   只接受 dshnotify://jump?session=<白名单字符>，其它一律静默退出。
+'   只接受 dshnotify-say://jump?session=<白名单字符>，其它一律静默退出。
+'
+' ## v0.5.0 协议改名
+'
+'   协议名从 dshnotify 改为 dshnotify-say（见 lib/index.js 的 JUMP_PROTOCOL）。
+'   匹配**只认新名**：老键由插件启动时清掉，这里不必兼容旧 URL。
 
 Option Explicit
 
@@ -60,7 +65,7 @@ sid = ""
 Dim m
 Set m = New RegExp
 m.IgnoreCase = True
-m.Pattern = "^dshnotify://jump/?(\?(.*))?$"
+m.Pattern = "^dshnotify-say://jump/?(\?(.*))?$"
 If Not m.Test(url) Then
   LogLine "[skip] url not matched"
   WScript.Quit 0

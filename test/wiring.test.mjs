@@ -28,6 +28,18 @@ process.on('exit', () => { try { rmSync(ISOLATED_HOME, { recursive: true, force:
 // 必须在 import 插件之前设置：插件在模块顶层读 SystemRoot 计算 POWERSHELL_EXE。
 process.env.SystemRoot = 'Z:\\__no_such_root__';
 
+// ⚠️ 显式关闭注册表访问（v0.5.0 起必须）。
+//
+// 上面那个 SystemRoot 桩**不足以**当保护：它只是让 powershell.exe 路径失效，
+// 属于"顺带没删成"，不是约定。而 v0.5.0 给 apply() 增加了
+// `cleanupLegacyProtocols()`（会 Remove-Item 历史 dshnotify 键）——
+// 一旦这个桩被改动、或 POWERSHELL_EXE 改成走 PATH 查找，
+// 跑测试就会删掉用户机器上真实的协议注册。
+//
+// DSH_NOTIFY_NO_REGISTRY=1 是插件里所有注册表读写（probe / register /
+// unregister / cleanup）共同的守卫，这里显式写上，不依赖副作用。
+process.env.DSH_NOTIFY_NO_REGISTRY = '1';
+
 const { apply } = await import('../lib/index.js');
 
 /**

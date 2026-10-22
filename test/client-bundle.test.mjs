@@ -705,7 +705,7 @@ test('C27: 设置页必须提供「点击通知跳到对应会话」开关', () 
   assert.match(src, /点了才跳|你点了才跳/, '文案必须说明这是"点了才跳"');
 
   // 必须告知会注册 Windows 协议（有人会介意）
-  assert.match(src, /dshnotify:\/\//, '文案必须提到会注册 dshnotify:// 协议');
+  assert.match(src, /dshnotify-say:\/\//, '文案必须提到会注册 dshnotify-say:// 协议');
   assert.match(src, /关掉时自动清理|关掉.*清理/, '文案必须说明关掉会清理');
 
   // 开启后必须提示"自动跳暂时不生效"，否则用户调下面的开关没反应会以为坏了

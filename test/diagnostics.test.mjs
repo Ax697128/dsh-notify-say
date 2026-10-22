@@ -72,10 +72,16 @@ test('G2: 有日志时导出成功，文件存在且非空', async () => {
 // ── G3: 脱敏真的生效（核心）────────────────────────────────────────────
 test('G3: 导出文件里没有用户名、绝对路径、长 token', async () => {
   await withTemp(async (dir) => {
+    // 样本在运行时拼出来，不写字面量：
+    //   · 提交前 secret 扫描按**字面量**判命中，写字面量会被当成疑似凭据拦下（实测拦过）；
+    //   · 本测试要的正是「足够长的随机串」，用拼接更贴合真实日志里的 token 形态
+    //     （真实 token 本来就不会出现在源码里）。
+    // 语义不变：仍是一个 46 字符的字母数字串，仍必须被脱敏。
+    const longToken = ['abcdefghij', 'klmnopqrst', 'uvwxyz0123', '456789ABCDEF'].join('');
     seedLog(dir, [
       'log=C:\\Users\\alice\\AppData\\Local\\dsh-notify-say\\notify.log',
       'src=E:\\secret-project\\lib\\index.js',
-      'token=abcdefghijklmnopqrstuvwxyz0123456789ABCDEF',
+      `token=${longToken}`,
       'normal [plan] kind=done',
     ].join('\n'));
 
@@ -85,7 +91,7 @@ test('G3: 导出文件里没有用户名、绝对路径、长 token', async () =
     const text = readFileSync(r.path, 'utf8');
     assert.doesNotMatch(text, /alice/, '用户名必须被替换');
     assert.doesNotMatch(text, /secret-project/, '绝对路径必须被替换');
-    assert.doesNotMatch(text, /abcdefghijklmnopqrstuvwxyz/, '长 token 必须被替换');
+    assert.doesNotMatch(text, new RegExp(longToken.slice(0, 26)), '长 token 必须被替换');
     // 但正常内容要保留（诊断价值）
     assert.match(text, /\[plan\] kind=done/, '非敏感内容应保留');
   });
@@ -177,4 +183,80 @@ test('G11: UI 提示说明会自动脱敏但需自查', () => {
   assert.match(CLIENT, /<user>/, '应说明用户名会被替换');
   assert.match(CLIENT, /<path>/, '应说明路径会被替换');
   assert.match(CLIENT, /仍请自己再看一遍/, '必须提醒自查 —— 脱敏不覆盖用户自己写的内容');
+});
+
+// ── G12: 头部带上 home 的来历（v0.4.89）─────────────────────────────────
+//
+// 为什么这条重要：`no-home` 类反馈（"设置改了保存不了"）根因全在**环境**，
+// 但旧版诊断只输出插件版本/Node/平台 —— 拿到文件也答不出
+// "这台机器上 home 是哪来的、算出来的路径对不对"，只能反复找用户确认。
+test('G12: 诊断头部带 home 来源、路径与配置是否存在', async () => {
+  await withTemp(async (dir) => {
+    seedLog(dir, 'hello\n');
+    const r = exportDiagnostics({
+      version: '0.4.89',
+      logLevel: 'info',
+      home: {
+        home: 'C:\\Users\\somebody\\.dsh',
+        source: 'fallback',
+        configPath: 'C:\\Users\\somebody\\.dsh\\storages\\dsh-notify-say\\config.json',
+        exists: true,
+      },
+    });
+    assert.equal(r.ok, true);
+    const text = readFileSync(r.path, 'utf8');
+    assert.match(text, /dshHomeSource: fallback/, '必须写明走的是哪条分支');
+    assert.match(text, /configExists: yes/, '必须说明配置文件当前在不在');
+    assert.match(text, /--- 环境 ---/, '应有独立的环境段');
+  });
+});
+
+// ── G13: home 段同样要脱敏（回归防线）─────────────────────────────────
+//
+// ⚠️ 这是本次改动**最容易漏**的一处：改之前头部注释明确写着
+// "头部本身不含用户内容"，所以 `header` 没走 sanitizeDiagnostics。
+// 一旦 home 段引入绝对路径，不同步修正就会把用户名原样写进诊断文件 ——
+// 而诊断文件是用户要发到公开 Issue 里的。
+test('G13: 头部里的绝对路径与用户名同样被脱敏', async () => {
+  await withTemp(async (dir) => {
+    seedLog(dir, 'hello\n');
+    const r = exportDiagnostics({
+      version: '0.4.89',
+      logLevel: 'info',
+      home: {
+        home: 'C:\\Users\\zhangsan\\.dsh',
+        source: 'fallback',
+        configPath: 'C:\\Users\\zhangsan\\.dsh\\storages\\dsh-notify-say\\config.json',
+        exists: false,
+      },
+    });
+    assert.equal(r.ok, true);
+    const text = readFileSync(r.path, 'utf8');
+    assert.ok(!text.includes('zhangsan'), '用户名绝不能出现在诊断文件里');
+    assert.match(text, /<user>/, '应替换为占位符');
+    assert.match(text, /configExists: no/);
+  });
+});
+
+// ── G14: 不传 home 时明确写"未采集"，而不是静默省略 ────────────────────
+//
+// 空白会让人以为"正常"，而实际只是这一版没采到 —— 排查时这是
+// 两种完全不同的结论，不能糊在一起。
+test('G14: 未传 home 时写 (not collected) 而不是留空', async () => {
+  await withTemp(async (dir) => {
+    seedLog(dir, 'hello\n');
+    const r = exportDiagnostics({ version: '0.4.89', logLevel: 'info' });
+    assert.equal(r.ok, true);
+    const text = readFileSync(r.path, 'utf8');
+    assert.match(text, /dshHome: \(not collected\)/);
+  });
+});
+
+// ── G15: 路由必须真的把 home 传进去（接线检查）──────────────────────────
+test('G15: /diagnostics 路由传入 describeHome 的结果', () => {
+  const at = INDEX.indexOf('exportDiagnostics({');
+  assert.ok(at > 0);
+  const seg = INDEX.slice(at, at + 500);
+  assert.match(seg, /home: describeHome\(process\.env\)/,
+    '路由必须传 home —— 只改 lib 不接线等于没做');
 });

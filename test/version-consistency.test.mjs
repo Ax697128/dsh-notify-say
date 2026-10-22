@@ -58,11 +58,19 @@ test('A1: package.json 的 version 是合法 semver', () => {
 });
 
 // ── A2: 源码里的版本标记不能超过 package.json ────────────────────────────
-test('A2: 源码注释里的 v0.4.x 标记不高于 package.json 的 version', () => {
+test('A2: 源码注释里的版本标记不高于 package.json 的 version', () => {
   const vPkg = parseSemver(pkg.version);
   assert.ok(vPkg, 'version 无法解析');
 
-  // 扫描主要源码文件里出现的 v0.4.N 标记
+  /** a 是否严格大于 b（都是 [major,minor,patch]）。 */
+  const gt = (a, b) => {
+    for (let i = 0; i < 3; i += 1) {
+      if (a[i] !== b[i]) return a[i] > b[i];
+    }
+    return false;
+  };
+
+  // 扫描主要源码文件里出现的 vX.Y.Z 标记
   const files = ['lib/index.js', 'lib/client.js', 'lib/config-store.js',
     'lib/config-schema.js', 'dsh-notify.ps1', 'lib/wav-gain.ps1'];
   const tooHigh = [];
@@ -70,12 +78,16 @@ test('A2: 源码注释里的 v0.4.x 标记不高于 package.json 的 version', (
     const p = join(ROOT, rel);
     if (!existsSync(p)) continue;
     const src = readFileSync(p, 'utf8');
-    // 只认 v0.4.N 这种明确的版本标记
-    const re = /\bv0\.4\.(\d+)\b/g;
+    // 只认 vX.Y.Z 这种明确的版本标记
+    const re = /\bv(\d+\.\d+\.\d+)\b/g;
     let m;
     while ((m = re.exec(src)) !== null) {
-      const n = Number(m[1]);
-      if (n > vPkg[2]) tooHigh.push(`${rel} 提到 v0.4.${n}`);
+      const v = parseSemver(m[1]);
+      // ⚠️ 2026-10-22 修正：原来只比补丁号（v0.4.N 的 N 与 pkg[2] 比）。
+      // 那只在"同一 minor 内"成立：升到 0.5.0 后，源码里**历史注释**
+      // 的 v0.4.83 会被当成"高于 0.5.0"（因为 83 > 0），全部误报。
+      // 正确判据是整段 semver 比较：注释不能比当前版本更新。
+      if (v && gt(v, vPkg)) tooHigh.push(`${rel} 提到 v${m[1]}`);
     }
   }
   assert.deepEqual(tooHigh, [],
