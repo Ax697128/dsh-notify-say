@@ -44,7 +44,60 @@ VOICEVOX 软件本体免费（含商用）。用它合成的音频可以自由�
 
 ---
 
-## 二、音效素材 — 已全部移除（原 Mixkit）
+## 一之二、中文语音合成 — EmotiVoice
+
+`sounds/voice-lines/` 下以 `zh-` 开头的 WAV（共 4 个音色 × 12 条 = 48 个）
+由 **EmotiVoice** 在本地离线合成，**不是** VOICEVOX。
+
+- 项目主页：<https://github.com/netease-youdao/EmotiVoice>
+- 开发方：网易有道（NetEase Youdao）
+- 本插件**不包含** EmotiVoice 的模型与代码，只包含用它输出的音频文件
+
+### 许可链（逐层说明，因为这里有三层）
+
+| 层 | 内容 | 许可 |
+|---|---|---|
+| 1 | EmotiVoice 的**代码与模型权重** | **Apache License 2.0** |
+| 2 | 模型训练语料 **LibriTTS** / **HiFiTTS** | **CC BY 4.0**（允许商用，需署名） |
+| 3 | 底层录音来源 LibriVox | **公有领域**（朗读者已明示捐入） |
+
+关于第 1 层：EmotiVoice 仓库根目录的 `LICENSE` 是标准 Apache License 2.0；
+随仓库分发的《EmotiVoice 用户协议》PDF 第 4.1 条也明确写着
+「有道基于 Apache2.0 开源协议向您授权使用」。**但该 PDF 同时约束官方交互页面**，
+我们不使用那个页面，只使用本地推理输出。
+
+关于第 2 层：LibriTTS（<https://www.openslr.org/60/>）与
+HiFiTTS（<https://www.openslr.org/109/>）在 OpenSLR 上都标注为 CC BY 4.0。
+
+关于第 3 层：LibriVox 官方说明「all our recordings are public domain …
+anyone can use all our recordings however they wish (even to sell them)」
+（<https://librivox.org/pages/public-domain>）。
+
+### 音色署名与命名
+
+音色在界面上**只按声学特征命名**（低沉男声 / 平稳男声 / 清亮女声 / 温柔女声），
+不使用任何真名。
+
+原因：EmotiVoice 的说话人索引背后是 LibriTTS / HiFiTTS 语料里的 LibriVox
+志愿录音者，那些名字是**真人姓名**。拿真人姓名当我们产品的音色标签，
+既会误导用户以为得到了该人的授权，也不合适。所以只描述声音。
+
+如果需要按 CC BY 4.0 署名，可用 `sounds/voice-lines/../MANIFEST.json` 里记录的
+`EmotiVoice:speaker-<index>` 形式，并在需要时引用上述两个数据集页面。
+
+### 与 VOICEVOX 音色的关系
+
+两套音色在**分发机制上完全相同**：同样的 zip 结构、同样的 `packs.json` 索引、
+同样的设置页下载与卸载流程、同样的条款确认弹窗。区别只有两处：
+
+1. 生成引擎不同（EmotiVoice vs VOICEVOX）
+2. 台词语言不同（中文 vs 日语）
+
+打包时 `tools/build-voice-packs.ps1` 会按 `Engine` 字段分别生成 TERMS.md，
+**中文包不会冒充 VOICEVOX 生成**。
+
+---
+
 
 **2026-10-18：移除了此前随包分发的 10 个 Mixkit mp3 音效。**
 

@@ -44,6 +44,45 @@ import {
 /** 我们写进注册表键的身份标记值（应与 package.json 的 name 一致）。 */
 const OWNER = OWNER_ID;
 
+// ══ 源码切片工具：按**真实函数边界**取函数体 ═══════════════════════════════
+//
+// ## 为什么不能用 `SRC.slice(at, at + 1200)`（只读审查 B3，2026-10-22 实测）
+//
+// 硬编码窗口是魔法数，和函数实际长度无关。实测（按闭合括号量的**函数体**长度）：
+//   readProtocolRegistration 1572 > 窗口 1400
+//   registerJumpProtocol     3246 > 窗口 1200
+//   unregisterJumpProtocol   1083 < 窗口 1200
+//   cleanupLegacyProtocols   1547 > 窗口  900
+//   syncJumpProtocol         1652 > 窗口 1200
+//   probeJumpProtocol         613 < 窗口 2000
+//
+// 也就是说 B3 不是「将来会坏」——**四个函数的旧窗口当时就已经小于函数体长了**，
+// 守卫没被截掉纯属位置巧合（都在函数开头几行）。谁在前置加一段注释，
+// 守卫就滑出窗口 → 静默变松（守护卫滑出去、而别处关键词滑进来），
+// 或静默变红（守卫还在、但窗口截在它前面）。两种都是假信号。
+//
+// ## 做法
+//
+// 取 `function` 那一行**自己的缩进**，再按同一缩进取闭合括号。
+// 顶层函数（0 空格，如 lib/client.js）与嵌套函数（2 空格，如 lib/index.js
+// 里 apply() 内的那些）都适用。
+// 找不到边界就 fail-closed 抛错 —— 宁可让测试红，也不要用一个猜出来的范围。
+function functionBody(src, name) {
+  const at = src.indexOf(`function ${name}(`);
+  if (at < 0) throw new Error(`找不到函数 ${name}（源码结构变了，请更新本测试）`);
+
+  // 取 `function` 那一行的缩进：lib/index.js 的内部函数都在 apply() 里（2 空格），
+  // lib/client.js 的顶层函数是 0 空格。按同一缩进取闭合括号，两种源码都能用。
+  const lineStart = src.lastIndexOf('\n', at) + 1;
+  const indent = src.slice(lineStart, at); // 只含空格/Tab
+  if (!/^[ \t]*$/.test(indent)) {
+    throw new Error(`${name} 不在行首（源码结构变了，请更新本测试）`);
+  }
+  const end = src.indexOf(`\n${indent}}`, at);
+  if (end < 0) throw new Error(`找不到 ${name} 的结束边界（源码结构变了，请更新本测试）`);
+  return src.slice(at, end + indent.length + 2);
+}
+
 /** 拼一条"像我们写的"注册命令（目录随便写，归属只认身份标记/handler 名）。 */
 const ourCmd = (handler) =>
   `"C:\\Windows\\System32\\wscript.exe" "E:\\0Deepseek\\tools\\plugins\\dsh-notify-say\\${handler}" "%1"`;
@@ -300,8 +339,9 @@ test('I1: index.js 必须使用纯函数（不能自己又写一套判定）', a
     'sync 必须调用 isLegacyRegistration 清理历史协议');
 
   // 反向断言：不能残留手写的四态判定（那说明有人又写了一份）
-  const probeAt = SRC.indexOf('function probeJumpProtocol()');
-  const probeBody = SRC.slice(probeAt, probeAt + 2000);
+  // 用真实函数边界而不是 SRC.slice(at, at + 2000)：窗口是魔法数，
+  // probeJumpProtocol 现在 613 字，但谁在前面加一段注释就可能滑出去。
+  const probeBody = functionBody(SRC, 'probeJumpProtocol');
   assert.doesNotMatch(probeBody, /return 'foreign'/,
     'probe 里不该再有手写的 foreign 判定 —— 判定已收进纯函数');
 });
@@ -346,7 +386,7 @@ test('I2b: readProtocolRegistration 的 PowerShell 必须设 OutputEncoding=UTF8
 
   const fnAt = SRC.indexOf('function readProtocolRegistration(');
   assert.ok(fnAt > 0, '找不到 readProtocolRegistration（源码结构变了，请更新本测试）');
-  const body = SRC.slice(fnAt, fnAt + 1400);
+  const body = functionBody(SRC, 'readProtocolRegistration');
 
   assert.match(body, /\[Console\]::OutputEncoding = \[Text\.Encoding\]::UTF8/,
     '读注册表的 PowerShell 必须先把 OutputEncoding 设成 UTF8 —— '
@@ -447,7 +487,7 @@ test('I6: cleanupLegacyProtocols 必须有进程内缓存（只查一次）', as
 
   const fnAt = SRC.indexOf('function cleanupLegacyProtocols()');
   assert.ok(fnAt > 0, '找不到 cleanupLegacyProtocols（源码结构变了，请更新本测试）');
-  const body = SRC.slice(fnAt, fnAt + 900);
+  const body = functionBody(SRC, 'cleanupLegacyProtocols');
 
   assert.match(body, /if \(legacyProtocolsChecked\) return;/,
     '重复调用必须直接返回 —— 否则每次配置变更都多开 PowerShell 读注册表');
@@ -471,67 +511,282 @@ test('I6: cleanupLegacyProtocols 必须有进程内缓存（只查一次）', as
 //
 // 正确顺序：**先**确认新键可用（reuse / 注册成功），**再**清老键。
 //
-// ## ⚠️ 第一版是假绿（只读审查 B1 抓到，已修）
+// ## ⚠️ 第二版仍是假绿（只读审查 B1，2026-10-22 实测）
 //
-// 第一版用 `body.indexOf('registerJumpProtocol()')` 找锚点 —— 但它命中的是
-// `unregisterJumpProtocol();` 这行（子串里就含 `registerJumpProtocol()`），
-// 而不是真正的 `registerJumpProtocol()` 调用。位置更靠前，于是断言恒成立。
+// 第二版按行号比大小：只要每个裸 cleanup 的行号都「晚于 probeLine」就算过。
+// 但 `lib/index.js:1809` 的 `const probed = probeJumpProtocol();` 正是函数体
+// **第 2 行** → probeLine 恒为 2 → 任何 cleanup 行号都 > 2 → 断言恒成立。
 //
-// 更糟的是它挡不住真正的回归：把 register 分支里的 cleanup 挪到 register 之前
-// （保留 unregister 分支那条），第一版**依然通过**。
+// 实测（复制整包到临时目录、注入后跑本文件）：
+//   在 register 分支里、`registerJumpProtocol()` **之前**插一行裸
+//   `cleanupLegacyProtocols();` → 35 pass / 0 fail，**依然全绿**。
+// 而那正是 I8 注释自述要挡的「更糟的回归」。
 //
-// 现在改为按「源码里的实际行」定位，并且**同时**验证两条：
-//   ① register 分支内：`const okReg = registerJumpProtocol();` 在 `if (okReg) cleanup...` 之前
-//   ② 函数整体：不存在比 register 更早的裸 cleanup 调用（unregister 分支除外）
+// ## 现在的判据（白名单式，比大小 → 比归属）
+//
+// 不再问「它比谁早」，而是问「**它在哪个分支块里**」：
+//   ① 三个分支块（unregister / reuse / register）的位置先解析出来；
+//   ② 每一处 cleanup 调用必须**落在某个分支块内部** —— 落在函数顶层
+//      （任何分支之外）就是「无条件先清」，直接红；
+//   ③ register 块内部只允许 `if (okReg) cleanupLegacyProtocols();` 这一种形态，
+//      裸调用一律红（注册可能失败，失败时必须保留老键）。
+//
+// 这样无论怎么调整语句顺序、加多少行注释，判据都不受影响。
 function lineIndexOf(src, needle) {
   const at = src.indexOf(needle);
   if (at < 0) return -1;
   return src.slice(0, at).split('\n').length; // 1-based 行号
 }
 
-test('I8: cleanupLegacyProtocols 必须在 registerJumpProtocol 之后调用', async () => {
+// ══ 代码区判据：把「字符串冒充代码」的假绿堵死 ══════════════════════════════
+//
+// ## 为什么需要（只读复核 R3，2026-10-22 实测，两处都是全绿）
+//
+// 只要判据是「在这行里能匹配到某段文本」，那**把真代码换成一段含同样文本的
+// 字符串**就能同时满足判据和破坏行为：
+//   · 把 reuse 分支的 `cleanupLegacyProtocols();` 换成
+//     `appendNotifyLog('…cleanupLegacyProtocols();…')` → I8 仍数到 3 处；
+//   · 把两条真守卫换成 `const _g = "__STUB_CHILD_PROCESS__ === true"` → I9 仍绿，
+//     而测试会真的写开发者注册表。
+//
+// ## 判据
+//
+// `scanSource().masked` 里**字符串内容与注释一律是空格**，只有真代码非空格。
+// 于是「匹配起点那一列在 masked 里是不是空格」就是最小充分判据：
+// 起点在空格上 = 这段文本长在字符串/注释里，不是代码。
+//
+// 为什么只查**起点**而不是整段：跨行模板串会让整段覆盖多行，逐字符比对要跨行拼接；
+// 起点足以区分「代码里的 `foo();`」与「字符串里的 `foo();`」，实测这条就够。
+function isCodeAt(masked, lineIdx, col) {
+  const row = masked[lineIdx];
+  if (row == null) return false;
+  const ch = row[col];
+  return ch !== undefined && ch !== ' ';
+}
+
+/**
+ * 在单行 `lines[lineIdx]` 上跑 `re`，只返回**起点落在代码区**的匹配。
+ *
+ * @returns {Array<{col:number, text:string}>}
+ */
+function codeMatchesOnLine(lines, masked, lineIdx, re) {
+  const line = lines[lineIdx] || '';
+  const out = [];
+  const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;
+  const rx = new RegExp(re.source, flags);
+  let m;
+  while ((m = rx.exec(line)) !== null) {
+    if (isCodeAt(masked, lineIdx, m.index)) out.push({ col: m.index, text: m[0] });
+    if (m[0] === '') rx.lastIndex += 1;   // 防零宽匹配死循环
+  }
+  return out;
+}
+
+/** 在多行上跑同一个 `re`，只返回代码区匹配（`line` 为 1-based）。 */
+function codeMatches(lines, masked, re) {
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    for (const m of codeMatchesOnLine(lines, masked, i, re)) out.push({ line: i + 1, ...m });
+  }
+  return out;
+}
+
+/**
+ * 整行 trim 后匹配 `re`，且要求**首个非空列落在代码区**。
+ *
+ * 用于「这一行是不是一句真语句」这类判据（`if (v) foo();` / `if (v) {`）。
+ *
+ * 为什么不直接用 `codeMatchesOnLine`：那些正则都带 `^` 锚点，
+ * 而 `masked` 保留了原始缩进 —— `^` 只能匹配到行首空格，永远匹配不上。
+ * 取 `trim()` 丢掉缩进后，再用「首个非空列」去问 `masked` 是不是空格，
+ * 就同时满足了「带锚点」与「必须是代码」两个要求。
+ *
+ * 反例（都实测过）：`appendNotifyLog('if (okReg) cleanup();')` 的
+ * 首个非空列是 `a`（代码），但 trim 后不匹配带 `^if` 的正则 → 正确判否；
+ * `'   if (okReg) cleanup();'`（整行是字符串内容）首个非空列在 masked 里是空格 → 判否。
+ */
+function statementInCode(lines, masked, lineIdx, re) {
+  const line = lines[lineIdx] || '';
+  const trimmed = line.trim();
+  if (!re.test(trimmed)) return false;
+  const firstCol = line.length - line.trimStart().length;
+  return isCodeAt(masked, lineIdx, firstCol);
+}
+
+/**
+ * 从 `if (...)` 那行开始，按花括号配对找出这个分支块的 [起, 止] 行号（1-based，含）。
+ *
+ * @param {string[]} masked    `scanSource().masked`（数括号用）
+ * @param {string[]} lines     `scanSource().lines`（匹配头部用，字符串原文在）
+ * @param {RegExp} headerRe    匹配 `if (...)` 头部的正则
+ * @param {number} [withinLine]  可选：只要**包含这一行**的那个块。
+ *   不给则返回第一个匹配的块。
+ *
+ * ## 为什么需要 withinLine（自测发现，2026-10-22 实测）
+ *
+ * 原实现用 `findIndex` 取**第一个**匹配的 `if (v) {`。源码里只要出现两个
+ * 同条件的 if 块，就会认错块 → 假红：
+ *
+ *     if (okReg) { /* 标记 *​/ }          // ← 被 findIndex 选中
+ *     if (okReg) {
+ *       cleanupLegacyProtocols();          // ← 合法，却因为不在第一个块里被判「裸调用」
+ *     }
+ *
+ * 实测该形态 34 pass / 1 fail。假红和假绿一样有害 —— 它训练人改测试让它变绿。
+ * 所以「找哪个块」必须由**被检查的那一行**决定，而不是靠「第一个匹配」。
+ *
+ * ## 为什么 lines 与 masked 分开（2026-10-22 实测）
+ *
+ * headerRe 要匹配 `if (plan.action === 'unregister')`，字符串原文必须在；
+ * 数括号又不能把字符串里的 `{` 算进去。所以两个数组各管一件事。
+ *
+ * ## 为什么开头也必须查代码区（只读复核 R3，2026-10-22 实测）
+ *
+ * 头部原先直接 `headerRe.test(lines[i])`，而 `lines` 里字符串原文还在。
+ * 于是**一条恰好含有这段文本的日志**会被认成「分支头」：
+ *
+ *     appendNotifyLog(`if (plan.action === 'unregister') { cleanupLegacyProtocols(); }`);
+ *
+ * 这类日志会多认一个分支头，并从字符串行开始数括号 → 假红 35p/1f。
+ * 现在改用 `codeMatchesOnLine`：匹配**起点必须在代码区**。
+ * 注意不能简单地改用 `masked` 匹配 —— 头部本身含字符串字面量
+ * （`=== 'unregister'`），masked 会把它抹空，那样一条都匹配不到。
+ */
+function branchRange(masked, lines, headerRe, withinLine) {
+  const starts = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (codeMatchesOnLine(lines, masked, i, headerRe).length > 0) starts.push(i);
+  }
+  if (starts.length === 0) return null;
+
+  const rangeOf = (start) => {
+    const end = findBlockEnd(masked, start);
+    return end < 0 ? null : [start + 1, end + 1];
+  };
+
+  if (withinLine == null) return rangeOf(starts[0]);
+
+  // 只认**包含目标行**的那个块；有多个包含时取最靠后的起点（最贴近的块）。
+  let best = null;
+  for (const s of starts) {
+    if (s + 1 > withinLine) continue;          // 块在目标行之后才开 → 不可能包含
+    const r = rangeOf(s);
+    if (r && withinLine >= r[0] && withinLine <= r[1]) best = r;
+  }
+  return best;
+}
+
+test('I8: cleanupLegacyProtocols 只能在「新键已可用」的分支里调用', async () => {
   const { readFileSync } = await import('node:fs');
   const { join, resolve, dirname } = await import('node:path');
   const { fileURLToPath } = await import('node:url');
   const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const SRC = readFileSync(join(ROOT_DIR, 'lib', 'index.js'), 'utf8');
 
-  const fnAt = SRC.indexOf('function syncJumpProtocol()');
-  assert.ok(fnAt > 0, '找不到 syncJumpProtocol（源码结构变了，请更新本测试）');
-  const afterFn = SRC.indexOf('\n  function svc(', fnAt);
-  assert.ok(afterFn > fnAt, '找不到 syncJumpProtocol 的结束边界（源码结构变了，请更新本测试）');
-  const body = SRC.slice(fnAt, afterFn);
+  const rawBody = functionBody(SRC, 'syncJumpProtocol');
+  // ⚠️ 必须用**剥掉注释**的行做扫描（只读审查 R2，2026-10-22 实测）：
+  // 原先用原始行，把 reuse 分支的 `cleanupLegacyProtocols();` 注释掉
+  // （行为消失、文本还在）→ ③ 照样数到 3 处 → I8 全绿。
+  // 剥注释后这行不再计入，④ 的 `seen === 3` 就会红。
+  const { lines, masked } = scanSource(rawBody);
+  const body = lines.join('\n');
 
   // ── ① register 分支内部：先注册，再按结果决定是否清理 ──────────────────
-  const regCall = body.indexOf('const okReg = registerJumpProtocol();');
-  assert.ok(regCall > 0,
-    '找不到 `const okReg = registerJumpProtocol();`（源码结构变了，请更新本测试）');
-  const guardedCleanup = body.indexOf('if (okReg) cleanupLegacyProtocols();');
-  assert.ok(guardedCleanup > 0,
-    '注册结果必须被用来决定是否清老键（失败时保留老键）');
-  assert.ok(guardedCleanup > regCall,
-    'if (okReg) cleanupLegacyProtocols() 必须排在 registerJumpProtocol() 之后');
-
-  // ── ② 全函数：不允许出现"比探测/注册更早"的裸 cleanup 调用 ────────────
   //
-  // 判据取的是**最危险的那种错法**——把 cleanup 挪到函数最前面（先清后建）。
-  // 所以只要每个裸调用的行号都晚于 `const probed = probeJumpProtocol();`，
-  // 就说明它落在某个分支里（reuse / unregister / register 成功），不是"无条件先清"。
-  const lines = body.split('\n');
-  const probeLine = lineIndexOf(body, 'const probed = probeJumpProtocol();');
-  assert.ok(probeLine > 0,
-    '找不到 `const probed = probeJumpProtocol();`（源码结构变了，请更新本测试）');
+  // ⚠️ 不能用字面量匹配单个精确行（只读审查 R3，2026-10-22 实测）：
+  // 原先断言 `if (okReg) cleanupLegacyProtocols();` 的**精确文本**，
+  // 于是两种语义完全等价的合法重构都会假红：
+  //   · `if (okReg) { cleanupLegacyProtocols(); }`（加花括号、拆多行）
+  //   · 把变量 `okReg` 改名成 `registered`
+  // 假红和假绿一样有害 —— 它训练人「改测试让它变绿」。
+  //
+  // 现在的判据是**语义**：先抓「哪个变量接住了 registerJumpProtocol() 的返回值」，
+  // 再要求 register 分支里的 cleanup 受**那个变量**守卫。名字随便改都不影响。
+  const regAssign = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*registerJumpProtocol\(\)\s*;/.exec(body);
+  assert.ok(regAssign,
+    '找不到 `const xxx = registerJumpProtocol();`（源码结构变了，请更新本测试）');
+  const okVar = regAssign[1];
+  const regCallLine = lineIndexOf(body, regAssign[0]);
+  const escVar = okVar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  const guardedLine = body.slice(0, guardedCleanup).split('\n').length;
-  for (let i = 0; i < lines.length; i++) {
-    const ln = i + 1;
-    // 只找**裸调用**（行首就是调用，不是 if (okReg) 包着的那种）
-    if (!/^\s*cleanupLegacyProtocols\(\);/.test(lines[i])) continue;
-    if (ln === guardedLine) continue; // 受 okReg 保护的，跳过
-    assert.ok(ln > probeLine,
-      `第 ${ln} 行有比 probeJumpProtocol()（第 ${probeLine} 行）更早的 cleanupLegacyProtocols() 裸调用 —— `
-      + '那就是"先删老键再建新键"，新键一旦失败用户就两头落空（连唤窗都没了）');
+  /** 这个变量是否守卫了第 idx 行（0-based）的 cleanup 调用。 */
+  function guardedByVar(idx, varName) {
+    const esc = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // ⚠️ 两种形态都必须查**代码区**（只读复核 R3，2026-10-22 实测）：
+    // 原先只看 `lines[idx].trim()` 能否匹配，于是字符串里的同名文本照样算数 ——
+    // 一行 `appendNotifyLog('if (okReg) cleanupLegacyProtocols();')` 就算"受守卫"。
+    // 现在用 `statementInCode`：整行 trim 后匹配，且**首个非空列必须在代码区**。
+    //
+    // 形态 A：同一行 `if (v) cleanupLegacyProtocols();`
+    const formA = new RegExp(`^if\\s*\\(\\s*${esc}\\s*\\)\\s*cleanupLegacyProtocols\\s*\\(\\s*\\)\\s*;`);
+    if (statementInCode(lines, masked, idx, formA)) return true;
+    // 形态 B：包在 `if (v) { ... }` 块里 —— 往上找最近的 `if (v) {`，
+    // 并且必须确认**这个块真的包含目标行**（不能只看「上面出现过」）。
+    // ⚠️ 这里必须传 withinLine：源码里有两个同条件 if 块时，不传会认错块 → 假红。
+    const formB = new RegExp(`^if\\s*\\(\\s*${esc}\\s*\\)\\s*\\{`);
+    for (let j = idx - 1; j >= 0; j -= 1) {
+      if (!statementInCode(lines, masked, j, formB)) continue;
+      const r = branchRange(masked, lines, new RegExp(`^\\s*if\\s*\\(\\s*${esc}\\s*\\)\\s*\\{`), idx + 1);
+      if (r && idx + 1 >= r[0] && idx + 1 <= r[1]) return true;
+    }
+    return false;
   }
+
+  // ── ② 三个分支块的真实范围 ──────────────────────────────────────────────
+  const ranges = {
+    unregister: branchRange(masked, lines, /if \(plan\.action === 'unregister'\)/),
+    reuse: branchRange(masked, lines, /if \(plan\.action === 'reuse'\)/),
+    register: branchRange(masked, lines, /if \(plan\.action === 'register'\)/),
+  };
+  for (const [k, v] of Object.entries(ranges)) {
+    assert.ok(v, `找不到 ${k} 分支块（源码结构变了，请更新本测试）`);
+  }
+  const inRange = (ln, [a, b]) => ln >= a && ln <= b;
+
+  // ── ③ 每一处 cleanup 调用都必须落在某个分支块内 ─────────────────────────
+  //
+  // ⚠️ 必须是**代码区**的调用，不能用 `lines` 裸匹配（只读复核 R3，2026-10-22 实测）：
+  // 把 reuse 分支的 `cleanupLegacyProtocols();` 换成
+  // `appendNotifyLog('…cleanupLegacyProtocols();…')` —— 行为消失、文本还在 ——
+  // 原实现照样数到 3 处 → **36p/0f 全绿**。现在走 `codeMatches`，
+  // 匹配起点落在字符串里的一律不算。
+  const CLEANUP_CALL_RE = /cleanupLegacyProtocols\s*\(\s*\)\s*;/;
+  const calls = codeMatches(lines, masked, CLEANUP_CALL_RE);
+
+  let seen = 0;
+  let guardedInRegister = 0;
+  for (const call of calls) {
+    const ln = call.line;
+    const i = ln - 1;
+    seen++;
+    const where = Object.entries(ranges).find(([, r]) => inRange(ln, r));
+    assert.ok(where,
+      `第 ${ln} 行的 cleanupLegacyProtocols() 不在任何分支块内：`
+      + `「${lines[i].trim()}」—— 那是无条件先清老键。`
+      + '新键一旦注册失败用户就两头落空（连唤窗都没了）');
+
+    // register 分支里只允许受「注册结果」保护的那一种
+    if (where[0] === 'register') {
+      assert.ok(ln > regCallLine,
+        `register 分支第 ${ln} 行的 cleanupLegacyProtocols() 排在 `
+        + `第 ${regCallLine} 行 registerJumpProtocol() 之前 —— 还没注册就先清了`);
+      assert.ok(guardedByVar(i, okVar),
+        `register 分支第 ${ln} 行的 cleanupLegacyProtocols() 必须受 `
+        + `«if (${escVar})» 守卫 —— 裸调用会在注册失败时也清掉老键。`
+        + `「${lines[i].trim()}」`);
+      guardedInRegister += 1;
+    }
+  }
+
+  // ── ④ 防"整段被删掉后无人可查"────────────────────────────────────────
+  assert.equal(seen, 3,
+    `syncJumpProtocol 里应有且只有 3 处 cleanupLegacyProtocols() 调用`
+    + `（unregister / reuse / register-success），实际 ${seen} 处。`
+    + '少了 = 某条路径不再清老键；多了 = 出现了未经判定的新调用点。'
+    + '（只数**代码区**的调用：写在字符串/注释里的同名文本不算，'
+    + '否则「注释掉调用、留一段文本」就能冒充"还在清"）');
+  assert.equal(guardedInRegister, 1,
+    `register 分支里应有且只有 1 处受 ${escVar} 守卫的 cleanup，实际 ${guardedInRegister} 处`);
 });
 
 // ══ I9: 四个碰注册表的函数必须**全部**有测试守卫 ═════════════════════════════
@@ -547,6 +802,359 @@ test('I8: cleanupLegacyProtocols 必须在 registerJumpProtocol 之后调用', a
 // 单测会往开发者（乃至 CI）机器上写注册表。开关关着的测试则会真的删。
 //
 // 只给 cleanup 补守卫 = 只堵了一半。四个函数必须同一口径。
+//
+// ## ⚠️ 裸子串会假绿（只读审查 B2，2026-10-22 实测）
+//
+// 第一版断言的是 `/__STUB_CHILD_PROCESS__/` 与 `/DSH_NOTIFY_NO_REGISTRY/`。
+// 「真守卫」和「注释里提一句关键词」对子串匹配是同一个信号。
+// 实测（index.js 副本）：
+//   删掉 register 的两条真守卫、只在旁边留一行
+//   `// 这里原本有 __STUB_CHILD_PROCESS__ 和 DSH_NOTIFY_NO_REGISTRY 守卫`
+//   → **I9 依然全绿**，而测试已经会真的写开发者的注册表。
+//
+// 现在要求匹配**守卫语句本身**（赋值/比较形态），且**必须在代码区**：
+// 注释不可能满足（注释在 masked 里是空格），写在字符串里也不可能满足
+// （字符串内容在 masked 里同样是空格）。
+//
+// ⚠️ 已删除 `stripComments`（只读复核 R3，2026-10-22 实测）：
+// 它只去注释、**不动字符串**，于是 `const _g = "__STUB_CHILD_PROCESS__ === true";`
+// 能同时骗过形态与位置断言 —— 36p/0f 全绿而测试会真写注册表。
+// 判据只留 `scanSource` 一套口径，不再有第二套"去注释"实现。
+
+/**
+ * 词法扫描源码，产出两份**逐行等长**的数组（行号、列号都与原文一致）：
+ *
+ *   lines[i]   去掉注释，**字符串字面量原样保留**
+ *              → 给正则匹配用（`if (plan.action === 'unregister')` 要能匹配到）
+ *   masked[i]  去掉注释，且字符串/模板串的**内容抹成空格**
+ *              → 给花括号计数用（`const m = "{";` 里的 `{` 不能算进深度）
+ *
+ * ## 为什么必须真词法扫描（2026-10-22 实测假红）
+ *
+ * 被扫的 `syncJumpProtocol` 里有跨行模板串：
+ *     appendNotifyLog(
+ *       `[jump-proto] 新键 ${JUMP_PROTOCOL}: 注册失败…`
+ *       + `（${LEGACY_JUMP_PROTOCOLS.map((p) => p + '://').join(', ')}）—— `
+ *       + '留着它用户至少还能跳，删了两头落空'
+ *     );
+ * 按字符裸扫 + 行尾复位 `'`/`"` 的实现，一进模板串就再也没出来（同一行后面的
+ * `'://'` 被当成开了普通字符串），之后所有 `}` 都被当成字符串内容吞掉 →
+ * 三个分支块全算成 [15,45]（函数末尾）→ I8 假红
+ * 「register 分支里应有且只有 1 处受 okReg 守卫的 cleanup，实际 0 处」。
+ *
+ * 所以必须正确处理：模板串跨行、`${}` 嵌套（含嵌套里的字符串）、
+ * 字符串里的转义、注释里的引号。这也是为什么不再手写第二套扫描。
+ */
+function scanSource(src) {
+  const lines = [];   // 去注释，字符串原样
+  const masked = [];  // 去注释，字符串内容抹空
+
+  let line = '';
+  let mask = '';
+
+  const endLine = () => { lines.push(line); masked.push(mask); line = ''; mask = ''; };
+
+  /** 代码字符：两边都保留。 */
+  const keep = (ch) => {
+    if (ch === '\n') { endLine(); return; }
+    line += ch; mask += ch;
+  };
+  /** 字符串内容：`lines` 保留原文（正则需要），`masked` 抹空（括号不能算）。 */
+  const hide = (ch) => {
+    if (ch === '\n') { endLine(); return; }
+    line += ch; mask += ' ';
+  };
+  /** 注释内容：两边都不算代码；`lines` 用空格占位以保住列号。 */
+  const drop = (ch) => {
+    if (ch === '\n') { endLine(); return; }
+    line += ' '; mask += ' ';
+  };
+
+  // 模式栈，栈底是 code。元素：{m:'code'} | {m:'str',q} | {m:'tpl'} | {m:'expr',depth}
+  // expr = 模板串 `${...}` 的表达式内部：按代码扫描，`}` 深度归零时弹回 tpl。
+  const modes = [{ m: 'code' }];
+  let i = 0;
+
+  while (i < src.length) {
+    const ch = src[i];
+    const top = modes[modes.length - 1];
+
+    // ── 普通字符串 ───────────────────────────────────────────────
+    if (top.m === 'str') {
+      if (ch === '\\' && src[i + 1] !== undefined) { hide(ch); hide(src[i + 1]); i += 2; continue; }
+      if (ch === top.q) { hide(ch); modes.pop(); i += 1; continue; }
+      if (ch === '\n') { hide(ch); modes.pop(); i += 1; continue; }  // 防呆：普通串不跨行
+      hide(ch); i += 1; continue;
+    }
+
+    // ── 模板串 ───────────────────────────────────────────────────
+    if (top.m === 'tpl') {
+      if (ch === '\\' && src[i + 1] !== undefined) { hide(ch); hide(src[i + 1]); i += 2; continue; }
+      if (ch === '`') { hide(ch); modes.pop(); i += 1; continue; }
+      if (ch === '$' && src[i + 1] === '{') {
+        hide(ch); hide('{');
+        modes.push({ m: 'expr', depth: 0 });
+        i += 2; continue;
+      }
+      hide(ch); i += 1; continue;   // 允许跨行
+    }
+
+    // ── ${...} 内部：} 归零则回到 tpl ─────────────────────────────
+    if (top.m === 'expr') {
+      if (ch === '{') { top.depth += 1; keep(ch); i += 1; continue; }
+      if (ch === '}') {
+        if (top.depth === 0) { hide(ch); modes.pop(); i += 1; continue; }
+        top.depth -= 1; keep(ch); i += 1; continue;
+      }
+    }
+
+    // ── 注释 ─────────────────────────────────────────────────────
+    if (ch === '/' && src[i + 1] === '/') {
+      while (i < src.length && src[i] !== '\n') { drop(src[i]); i += 1; }
+      continue;
+    }
+    if (ch === '/' && src[i + 1] === '*') {
+      drop('/'); drop('*'); i += 2;
+      while (i < src.length) {
+        if (src[i] === '*' && src[i + 1] === '/') { drop('*'); drop('/'); i += 2; break; }
+        drop(src[i]); i += 1;
+      }
+      continue;
+    }
+
+    // ── 开串 ─────────────────────────────────────────────────────
+    if (ch === "'" || ch === '"') { hide(ch); modes.push({ m: 'str', q: ch }); i += 1; continue; }
+    if (ch === '`') { hide(ch); modes.push({ m: 'tpl' }); i += 1; continue; }
+
+    keep(ch); i += 1;
+  }
+
+  endLine();
+  return { lines, masked };
+}
+
+/**
+ * 找出 `masked` 里的**正则字面量**，返回 `{line, col, text}`（`line` 1-based）。
+ *
+ * ## 为什么需要（只读复核 R3，2026-10-22 实测）
+ *
+ * I10 原先只查「含 `\{` 或 `\}` 的正则」，于是下面这条完整绕过它：
+ *     在 `if (okReg) {` 里塞 `const _re = /{/;`   ← 无转义，检查不到
+ *     再把块撑到函数末尾，并在文件别处插 `const _c = /}/;` 补平括号
+ *   → 整文件级配平仍然通过，而「块外裸调 cleanup」会被算成「受 okReg 守卫」，
+ *     I8 的主判据整体旁路，**36p/0f 全绿**。
+ * `/[{}]/`、`/[({]/` 这类字符类写法同样不在原检查面内。
+ *
+ * ## 判别方式（标准 JS 词法启发式）
+ *
+ * 正则字面量只能出现在「表达式起始」位置，即前一个非空字符是
+ * `( , = : [ ! & | ? { } ;` 之一或行首；而 `/` 作为除号时前面是
+ * 标识符、数字、`)`、`]`、字符串结尾。据此在本仓代码上无误判（已实测）。
+ *
+ * 只认**同一行闭合**的字面量：跨行正则里出现花括号的情况本仓不存在，
+ * 漏检会由 I10 的「按函数体配平」兜住（正则撑歪括号 → 该函数体配不平）。
+ */
+function findRegexLiterals(masked) {
+  const out = [];
+  const BEFORE = /[(,=:[!&|?{};]/;   // 允许出现在正则左侧的字符
+  for (let i = 0; i < masked.length; i += 1) {
+    const line = masked[i] || '';
+    for (let k = 0; k < line.length; k += 1) {
+      if (line[k] !== '/') continue;
+      if (line[k + 1] === '/' || line[k + 1] === '*') continue;  // 注释已被 scanSource 剥掉，防御性跳过
+      // 前一个非空字符
+      let p = k - 1;
+      while (p >= 0 && line[p] === ' ') p -= 1;
+      const atExpressionStart = p < 0 || BEFORE.test(line[p]);
+      if (!atExpressionStart) continue;
+      // 同一行内找闭合的 `/`（跳过转义与字符类）
+      let q = k + 1;
+      let inClass = false;
+      let closed = -1;
+      while (q < line.length) {
+        const ch = line[q];
+        if (ch === '\\') { q += 2; continue; }
+        if (ch === '[') { inClass = true; q += 1; continue; }
+        if (ch === ']') { inClass = false; q += 1; continue; }
+        if (ch === '/' && !inClass) { closed = q; break; }
+        q += 1;
+      }
+      if (closed < 0) continue;   // 跨行正则：不在此处判定，交给配平自检兜底
+      out.push({ line: i + 1, col: k, text: line.slice(k, closed + 1) });
+      k = closed;
+    }
+  }
+  return out;
+}
+
+/**
+ * 自检：`scanSource` 的两条硬保证 —— 逐行等长、括号配平。
+ *
+ * 为什么要在**生产测试里**做这个（2026-10-22 自查发现）：
+ *
+ * `scanSource` 是手写状态机，它不认识**正则字面量**。实测：
+ *     const re = /\{/;   →  masked 里多出一个 `{`
+ *     const re = /}/;    →  masked 里多出一个 `}`
+ *     const re = /["']/; →  引号被当成开串，**整行后半截被抹空**
+ * 前两种会让某个块的结束行算错 → 判据指向错误位置；第三种更糟，会把紧随其后的
+ * 代码一起吞掉。行注释 `// foo({` 不受影响（注释先被识别）。
+ *
+ * 现在被扫的 5 个函数里**一个正则字面量都没有**（已实测），所以当前无误判。
+ * 但这是个静默陷阱：将来有人在这些函数里写 `/^\{/`，判据会悄悄失准而不报错。
+ * 所以这里把它变成**显式断言**：
+ *   ① 两份数组必须逐行等长、且与原文同长（否则 code.slice(0,k) 取错列）
+ *   ② 剥出来的代码里 `{` 与 `}` 必须配平（否则说明有字面量/正则被误算）
+ *   ③ 被扫的函数体里不许出现**任何**含花括号的正则字面量 ——
+ *      不论转义形态（`/\{/`）还是字符类形态（`/[{}]/`）
+ *   ④ **每个函数体各自配平**（不只整文件配平）—— 见 findRegexLiterals 里的
+ *      绕过实例：一处多算 `{`、别处补一个 `}`，整文件级看不出来
+ * —— 一旦有人踩到，测试会红并直接告诉他原因，而不是等到判据莫名其妙地假红。
+ */
+test('I10: scanSource 自检（逐行等长 / 逐函数体配平 / 无含花括号正则）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { join, resolve, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+  const SCANNED_FNS = ['probeJumpProtocol', 'registerJumpProtocol', 'unregisterJumpProtocol',
+    'cleanupLegacyProtocols', 'syncJumpProtocol'];
+
+  for (const rel of [['lib', 'index.js'], ['lib', 'client.js']]) {
+    const src = readFileSync(join(ROOT_DIR, ...rel), 'utf8');
+    const rawLines = src.split('\n');
+    const { lines, masked } = scanSource(src);
+    const name = rel.join('/');
+
+    assert.equal(lines.length, rawLines.length,
+      `${name}: scanSource 产出的行数必须与原文一致（换行不能被吞）`);
+    assert.equal(masked.length, lines.length,
+      `${name}: lines 与 masked 必须逐行等长`);
+
+    for (let i = 0; i < rawLines.length; i += 1) {
+      assert.equal(masked[i].length, lines[i].length,
+        `${name}:${i + 1} 行 masked 与 lines 长度不等 —— 列号会错位，head 会取错`);
+      assert.equal(lines[i].length, rawLines[i].length,
+        `${name}:${i + 1} 行 lines 与原文长度不等 —— 行号会错位`);
+    }
+
+    // 括号配平：整文件级别的粗校验，能抓到「某个字面量里的括号被算进深度」
+    const stripped = masked.join('\n').replace(/[^{}]/g, '');
+    const open = (stripped.match(/\{/g) || []).length;
+    const close = (stripped.match(/\}/g) || []).length;
+    assert.equal(open, close,
+      `${name}: 剥出的代码里 { (${open}) 与 } (${close}) 不配平 —— `
+      + '说明有字符串/正则里的花括号被当成了代码括号。');
+
+    // ③ + ④ 逐函数体：括号必须配平，且不许出现含花括号的正则字面量
+    for (const fn of SCANNED_FNS) {
+      const at = src.indexOf(`function ${fn}(`);
+      if (at < 0) continue;   // 函数没了由 I8/I9 报，这里不管
+      const body = functionBody(src, fn);
+      const scanned = scanSource(body);
+
+      const braces = scanned.masked.join('\n').replace(/[^{}]/g, '');
+      const o = (braces.match(/\{/g) || []).length;
+      const c = (braces.match(/\}/g) || []).length;
+      assert.equal(o, c,
+        `${fn} 的函数体自身括号不配平（{ ${o} / } ${c}）—— `
+        + '这会让「找块边界」整段失准。\n'
+        + '常见原因：函数里有含花括号的正则字面量（scanSource 不识别正则）。\n'
+        + '修法：改用 new RegExp(\'\\\\{\') / new RegExp(\'}\')，或给 scanSource 补正则识别。');
+
+      const bad = findRegexLiterals(scanned.masked)
+        .filter((r) => /[{}]/.test(r.text));
+      assert.deepEqual(bad, [],
+        `${fn} 里出现了含花括号的正则字面量，scanSource 会把它们算进块深度：\n`
+        + bad.map((r) => `  · 第 ${r.line} 行：${r.text}`).join('\n') + '\n'
+        + '这会让 I8/I9 的块边界静默失准 —— 实测 `/ {/`（无转义）配合别处补一个 `/ }/` '
+        + '可以整体旁路 I8 判据而仍然全绿。\n'
+        + '修法二选一：① 改用 new RegExp(\'\\\\{\')；② 给 scanSource 补上正则字面量的识别。');
+    }
+  }
+});
+
+/**
+ * 按花括号配对维护一个「开启块」栈，扫描 `masked` 里 [起, 止列] 这段。
+ *
+ * @param {string[]} masked   `scanSource().masked`（字符串内容已抹空）
+ * @param {number} limitLine  扫到第几行（0-based，含）
+ * @param {number} limitCol   limitLine 上扫到第几列（不含）
+ * @returns {Array<{line:number, head:string}>} 未闭合块的栈
+ *
+ * ⚠️ 只接受 `masked`，不接受原始行 —— 见 scanSource 的注释：
+ * 拿含字符串原文的行去数括号，会被 `const m = "{";` 或跨行模板串撑歪。
+ */
+function scanBlockOpeners(masked, limitLine, limitCol) {
+  const openers = [];   // 栈：{ line, head }
+  for (let i = 0; i <= limitLine; i += 1) {
+    const code = masked[i] || '';
+    const end = (i === limitLine) ? limitCol : code.length;
+    for (let k = 0; k < end; k += 1) {
+      const ch = code[k];
+      if (ch === '{') openers.push({ line: i, head: code.slice(0, k + 1).trim() });
+      else if (ch === '}') openers.pop();
+    }
+  }
+  return openers;
+}
+
+/**
+ * 从 `start` 行（0-based）开始，按花括号配对找出这个块的**结束行**（0-based，含）。
+ * 找不到（文件里括号不配对）时返回 -1。
+ *
+ * @param {string[]} masked  `scanSource().masked`
+ */
+function findBlockEnd(masked, start) {
+  let depth = 0;
+  let opened = false;
+  for (let i = start; i < masked.length; i += 1) {
+    for (const ch of masked[i] || '') {
+      if (ch === '{') { depth += 1; opened = true; } else if (ch === '}') depth -= 1;
+    }
+    if (opened && depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * 这一行是否处在「函数体顶层」或「函数体顶层 try 块」里 —— 而不是嵌在
+ * 别的 `if` / `while` / 回调里。
+ *
+ * ## 为什么需要（只读审查 R1 补充，2026-10-22 实测）
+ *
+ * 只查「守卫语句存在 + 排在效果语句之前」还会漏一种：把守卫塞进永不执行的分支
+ *   `if (false) { <两条守卫> }`
+ * —— 形态合规、行号也在效果之前，但守卫根本不执行，测试照样真的写注册表。
+ * 实测该变异 **35p/0f 全绿**。
+ *
+ * 判据：从文件头一直扫到「守卫关键词所在的那一列（不含）」，
+ * 最内层开启块的 head 必须是 `try {` 或函数声明行。
+ * head 截到 `{` 为止，所以守卫与函数声明压在同一行时也不会被误杀。
+ *
+ * @param {string[]} masked  `scanSource().masked`
+ */
+function isTopLevelInFunction(masked, idx0, colOfGuard) {
+  const limitCol = Number.isFinite(colOfGuard) ? colOfGuard : (masked[idx0] || '').length;
+  const openers = scanBlockOpeners(masked, idx0, limitCol);
+  if (openers.length === 0) return false;
+  const inner = openers[openers.length - 1].head;
+  // 顶层 try 块
+  if (/^try\s*\{$/.test(inner)) return true;
+  // 函数体本身：head 形如 `function foo() {` / `export function foo(a, b) {`
+  // / `async function foo() {`
+  if (/^(?:export\s+)?(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{$/.test(inner)) return true;
+  return false;
+}
+
+/** 真正的守卫语句：把 `__STUB_CHILD_PROCESS__` / `DSH_NOTIFY_NO_REGISTRY` 当**条件**用。 */
+//
+// ⚠️ 只匹配「形态」还是不够（只读审查 R1，2026-10-22 实测）：
+// 把 register 的两条守卫整体挪到**写注册表之后** —— 形态完全合规、
+// 但已经守卫不了任何东西 —— I9 仍然 35p/0f 全绿。
+// 所以位置也要查，见下面 I9 的 ④。
+const STUB_GUARD_RE = /__STUB_CHILD_PROCESS__\s*===\s*true/;
+const NOREG_GUARD_RE = /process\.env\.DSH_NOTIFY_NO_REGISTRY\s*===\s*['"]1['"]/;
+
 test('I9: probe/register/unregister/cleanup 四个函数都必须有测试守卫', async () => {
   const { readFileSync } = await import('node:fs');
   const { join, resolve, dirname } = await import('node:path');
@@ -561,14 +1169,79 @@ test('I9: probe/register/unregister/cleanup 四个函数都必须有测试守卫
     'cleanupLegacyProtocols',
   ];
 
+  // ⚠️ ④ 位置判据（只读审查 R1，2026-10-22 实测）：
+  // 光验「守卫语句存在且形态对」会 fail-open —— 把两条守卫整体**挪到
+  // 写注册表之后**，形态完全合规、但已经守卫不了任何东西，仍然全绿。
+  // 所以还要查：**每一条**碰注册表的语句都必须排在**最后一条守卫之后**。
+  //
+  // 「碰注册表」= 读/写/删三类的真实调用或命令串。宁可多列几个锚点，
+  // 也不要漏 —— 判据方向是"我认识的必须都被挡住"，认不出来的新写法
+  // 会被 fns 清单和 I8 的白名单分别兜一层。
+  const REGISTRY_EFFECTS = [
+    { re: /readProtocolRegistration\s*\(/, what: 'readProtocolRegistration()（读注册表）' },
+    { re: /\bexecFileSync\s*\(/, what: 'execFileSync()（起 PowerShell 读写注册表）' },
+    { re: /Remove-Item/, what: 'Remove-Item（删注册表键）' },
+    { re: /Set-ItemProperty/, what: 'Set-ItemProperty（写注册表键）' },
+    { re: /New-Item /, what: 'New-Item（建注册表键）' },
+  ];
+
   for (const fn of fns) {
     const at = SRC.indexOf(`function ${fn}(`);
     assert.ok(at > 0, `找不到 ${fn}（源码结构变了，请更新本测试）`);
-    const body = SRC.slice(at, at + 1200);
-    assert.match(body, /__STUB_CHILD_PROCESS__/,
-      `${fn} 必须有 __STUB_CHILD_PROCESS__ 守卫 —— 否则走 loader 的测试会真的碰注册表`);
-    assert.match(body, /DSH_NOTIFY_NO_REGISTRY/,
-      `${fn} 必须有 DSH_NOTIFY_NO_REGISTRY 守卫 —— 否则单测会真的读写开发者机器注册表`);
+    const src = functionBody(SRC, fn);
+
+    // ⚠️ 不再用 `stripComments` 的纯文本匹配（只读复核 R3，2026-10-22 实测）：
+    // `stripComments` 只去注释、**不动字符串**，于是把两条真守卫整体换成
+    //   const _g = "__STUB_CHILD_PROCESS__ === true";
+    // 就能同时骗过形态断言与位置断言 —— **36p/0f 全绿**，而测试会真的写注册表。
+    // 现在统一走 `scanSource`：`masked` 里字符串与注释都是空格，
+    // 只有真代码非空格；`codeMatches` 只认起点在代码区的匹配。
+    const scanned = scanSource(src);     // 按行剥注释，行号不变
+    const code = scanned.lines;
+    const masked = scanned.masked;
+
+    const guardHits = (gre) => codeMatches(code, masked, gre);
+
+    assert.ok(guardHits(STUB_GUARD_RE).length > 0,
+      `${fn} 必须有 «__STUB_CHILD_PROCESS__ === true» 守卫 —— `
+      + '否则走 loader 的测试会真的碰注册表。'
+      + '（判据是**代码区**的守卫语句本身；写在注释或字符串里都不算）');
+    assert.ok(guardHits(NOREG_GUARD_RE).length > 0,
+      `${fn} 必须有 «process.env.DSH_NOTIFY_NO_REGISTRY === "1"» 守卫 —— `
+      + '否则单测会真的读写开发者机器注册表。'
+      + '（判据是**代码区**的守卫语句本身；写在注释或字符串里都不算）');
+
+    // ④ 位置：守卫必须**排在所有碰注册表的语句之前**
+    const idxOf = (gre) => {
+      const hits = guardHits(gre);
+      return hits.length > 0 ? hits[hits.length - 1].line : -1;
+    };
+    const lastGuard = Math.max(idxOf(STUB_GUARD_RE), idxOf(NOREG_GUARD_RE));
+    assert.ok(lastGuard > 0, `${fn} 找不到守卫所在行（不该发生，上一步已匹配到）`);
+
+    // ⑤ 守卫必须**真的会执行**：不能塞在 if/while/回调里（R1 补充，实测）
+    for (const gre of [STUB_GUARD_RE, NOREG_GUARD_RE]) {
+      for (const hit of guardHits(gre)) {
+        const gLine = hit.line;
+        assert.ok(isTopLevelInFunction(masked, gLine - 1, hit.col),
+          `${fn} 第 ${gLine} 行的守卫不在函数体顶层（或顶层 try 的顶层）—— `
+          + '它被包在别的条件/回调里，可能永远不执行。'
+          + `「${code[gLine - 1].trim()}」\n`
+          + '实测反例：`if (false) { <两条守卫> }` 形态合规、行号也够早，'
+          + '但守卫不执行，测试照样真的写注册表。');
+      }
+    }
+
+    for (const eff of REGISTRY_EFFECTS) {
+      const hits = codeMatches(code, masked, eff.re);
+      if (hits.length === 0) continue;
+      const effLine = hits[0].line;
+      assert.ok(effLine > lastGuard,
+        `${fn} 的「${eff.what}」在第 ${effLine} 行，`
+        + `但守卫在第 ${lastGuard} 行之后才结束 —— 守卫形同虚设。\n`
+        + '守卫必须写在**任何**碰注册表的语句之前，'
+        + '否则测试会真的读写开发者（乃至 CI）机器的注册表。');
+    }
   }
 });
 // ══ I7: 调用 apply() 的测试必须显式关闭注册表（防误删用户注册）════════════

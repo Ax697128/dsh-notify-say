@@ -308,3 +308,10 @@
 - feat(notify): 空闲门——子代理/后台任务在跑时不再误报「任务完成」
 - feat(notify): v0.3.1 失败语音——error 回合播日语道歉语音
 
+## 未发布
+
+- feat(voice): 新增 4 个中文音色（EmotiVoice 生成），自带「温柔女声」
+- fix(voice): 修正音色数量与引擎措辞（自查发现，避免中文音色被冒称为 VOICEVOX）
+- fix(voice): 语音包区「核心包只带 1 个音色」改为 2 个
+- fix(test): 中文音色「整组缺席」曾静默通过 + 修 CHANGELOG 在 git 根布局下失效
+
