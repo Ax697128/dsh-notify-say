@@ -3,6 +3,14 @@
 > 本文件由 `tools/release-build.ps1` 从开发提交自动生成，**请勿手工编辑**。
 > 只列面向使用者的变更（新增功能与修复），不含内部维护提交。
 
+## v0.5.2 — 2026-10-23
+
+- feat(voice): 新增 4 个中文音色（EmotiVoice 生成），自带「温柔女声」
+- fix(voice): 修正音色数量与引擎措辞（自查发现，避免中文音色被冒称为 VOICEVOX）
+- fix(voice): 语音包区「核心包只带 1 个音色」改为 2 个
+- fix(test): 中文音色「整组缺席」曾静默通过 + 修 CHANGELOG 在 git 根布局下失效
+- fix(package): .gitattributes 不进 npm 包，且 D19 判据自身有两个方向都不对
+
 ## v0.5.0 — 2026-10-22
 
 - fix(protocol): 协议改名 dshnotify-say + 归属判据改用身份标记（v0.5.0）
@@ -310,8 +318,6 @@
 
 ## 未发布
 
-- feat(voice): 新增 4 个中文音色（EmotiVoice 生成），自带「温柔女声」
-- fix(voice): 修正音色数量与引擎措辞（自查发现，避免中文音色被冒称为 VOICEVOX）
-- fix(voice): 语音包区「核心包只带 1 个音色」改为 2 个
-- fix(test): 中文音色「整组缺席」曾静默通过 + 修 CHANGELOG 在 git 根布局下失效
+- fix(test): D19j 补上三处「判据被兜底顶替」的盲区，并修掉一条理由说反的规则
+- fix(test): 白名单项数收敛成单一事实源，修掉 D19b/D19f 口径分叉
 

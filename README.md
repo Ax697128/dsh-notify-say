@@ -553,7 +553,7 @@ npm run test:route    # 需要 --import loader 的接线测试
 npm run test:audio-wire
 ```
 
-**564 条测试通过**（`test:all`：主套件 538 + route 注入 26，另有 26 条需真实 DSH 宿主、无宿主时自动 skip）。
+**575 条测试通过**（`test:all`：主套件 549 + route 注入 26，另有 26 条需真实 DSH 宿主、无宿主时自动 skip）。
 绝大多数是纯逻辑测试，克隆仓库后 `npm test` 即可跑。
 
 少数用例需要真实的 DSH 宿主（用于验证 Cordis 上下文行为）。
