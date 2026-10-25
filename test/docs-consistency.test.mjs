@@ -19,6 +19,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync, statSync, globSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -795,6 +796,162 @@ test('D16: PowerShell 脚本用 LF（与 .gitattributes 一致）', () => {
   assert.deepEqual(bad, [],
     '.ps1 里出现了 CR (CRLF 行尾) —— 与 .gitattributes 的 eol=lf 不一致，'
     + '会导致发布包与 GitHub 版本字节不同：\n' + bad.join('\n'));
+});
+
+// ── D16b: 所有文本扩展名都必须是 LF（不只是 .ps1）─────────────────────
+test('D16b: 所有声明了 eol=lf 的文本文件都不许出现 CR', () => {
+  // ⚠️ 2026-10-25 实测漏网：
+  //
+  // `.gitattributes` 声明的是 *.ps1 / *.js / *.mjs / *.md / *.json / *.yml
+  // / *.yaml / *.txt 全部 `text eol=lf`。但 D16 只检查 .ps1。
+  //
+  // 后果（我当场踩到）：用会写 CRLF 的编辑器/工具改 `test/voice-label.test.mjs`
+  // 之后，该文件变成 547 个 CRLF，而**整套 589 条测试照样全绿** ——
+  // 只有 `git commit` 时会冒出一句 warning，然后 git 在索引里悄悄归一化。
+  // 于是"工作树字节"与"提交/发布出去的字节"又一次不同，
+  // 而这正是上方 .gitattributes 注释里写明要杜绝的事。
+  //
+  // 判据来源必须与 .gitattributes 一致：直接从文件里解析出扩展名清单，
+  // 而不是在测试里另抄一份（抄一份就会漂移）。
+  //
+  // ⚠️ 2026-10-25 合并到主仓时立刻红了一次，暴露出一个真实缺陷：
+  // `.gitattributes` 的 `eol=lf` **只对 git 跟踪的文件生效** ——
+  // 被 .gitignore 排除的目录（本项目的 `.snapshots/` 存着历史快照，
+  // 是当年用 CRLF 工具生成的）不影响任何人 checkout 到的字节。
+  // 但这条判据只排除 node_modules / .tmp，于是把 `.snapshots/` 也扫了，
+  // 报「30 个文件违规」—— 全是历史快照，与本次改动无关。
+  //
+  // worktree 里没有 `.snapshots/`，所以这个假红**只在主仓才出现**。
+  // 修法不是加一个 `.snapshots` 白名单（那会随新目录名再次复发），
+  // 而是用 git 本身来问「这个文件被跟踪吗 / 被忽略吗」：
+  //   未跟踪 或 被忽略 ⇒ 跳过（eol=lf 对它没有约束力）
+  const GA = readFileSync(join(ROOT, '.gitattributes'), 'utf8');
+  const exts = [];
+  for (const line of GA.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const m = t.match(/^(\*\.[\w.]+)\s+.*\beol=lf\b/);
+    if (m) exts.push(m[1].slice(1).toLowerCase()); // '*.mjs' → '.mjs'
+  }
+  assert.ok(exts.length >= 5,
+    `.gitattributes 里应解析出至少 5 个 eol=lf 扩展名，实际 ${exts.length} 个：${exts.join(',')}`
+    + ' —— 若解析失败说明 .gitattributes 格式变了，下面这条判据会变成空过滤');
+
+  // 「哪些文件被 .gitignore 排除」—— 用 git 自己回答，不靠测试里另抄一份忽略规则。
+  //
+  // ## 这段被改过四次，每次都是同一个坑的另一面（留档，别再来第五次）
+  //
+  // 目标只有一个：**被 .gitignore 排除的文件不该被检查**，因为
+  // `.gitattributes` 的 `eol=lf` 对它们没有约束力（它们不参与 checkout，
+  // 不影响任何用户拿到的字节）。
+  //
+  // ① 首次：只排除 node_modules / .tmp → 主仓 `.snapshots/`（被忽略的
+  //    历史快照，30 个文件全是 CRLF）被当成违规，纯假红。
+  // ② 第二次：用 `--show-toplevel == ROOT` 判断"ROOT 是仓库根"。
+  //    **判据错**：插件目录本来就在大仓子目录里（toplevel=E:/0Deepseek），
+  //    主仓里恒为 false → 又退回全扫 → 假红复发。
+  //    被自己写的 prove-snapshots.mjs 抓出来。
+  // ③ 第三次：改成"ROOT 在 toplevel 之内"，然后**跳过所有未跟踪文件**。
+  //    **判据还是错**：`release.ps1` 第 3.5 步把发布包建在仓库内
+  //    （`…\.tmp\…`），里面 107 个文件全是「未跟踪但没被忽略」，
+  //    于是被全部跳过 → 扫到 0 个 → 反向证明报红。
+  //    被三形态矩阵（shape-matrix.mjs）抓出来。
+  // ④ 现在：**只跳过被忽略的，不跳过"未跟踪"的**。
+  //    两者语义完全不同：
+  //      · 被忽略（`.snapshots/`、`.tmp/`）→ eol=lf 管不到 → 跳过 ✓
+  //      · 未跟踪但没被忽略（刚新建的文件、发布包副本）→ 将来会入库
+  //        → 必须照常检查 ✓（这个严格性正是想要的）
+  //    这样三种形态都自然正确，不需要判断"是不是仓库根"：
+  //      · 源码目录：忽略清单含 .snapshots → 跳过它，其余照查
+  //      · 发布包（仓库内）：忽略清单为空（发布包里没有 .gitignore 规则生效）
+  //        → 全都照查，与修复前一致
+  //      · 发布包（仓库外）：没有 git → 全都照查
+  //
+  // ⑤ 第四次收尾时又发现一个边界（三形态矩阵的形态③抓的）：
+  //    **ROOT 自身落在被忽略的目录里时不能信忽略清单。**
+  //    典型场景：把发布包建在仓库的 `.tmp/` 底下（我自己就干过），
+  //    此时 `git ls-files --others --ignored` 会把该目录下**每一个**文件
+  //    都报成"被忽略"（因为父目录 `.tmp/` 被忽略），于是全部跳过 → 扫到 0。
+  //    判据：先问 `git check-ignore` 判定 ROOT 本身是否被忽略；
+  //    被忽略 ⇒ ignoredSet 保持 null（全都查）。
+  let ignoredSet = null;
+  try {
+    // 先判 ROOT 本身是否落在忽略范围内。退出码 0 = 被忽略。
+    let rootIgnored = false;
+    try {
+      execFileSync('git', ['check-ignore', '-q', '.'], { cwd: ROOT, stdio: 'pipe', timeout: 15_000 });
+      rootIgnored = true;   // 退出码 0 时 execFileSync 不抛
+    } catch (e) {
+      rootIgnored = e && e.status === 0;
+    }
+    if (!rootIgnored) {
+      // -z：NUL 分隔，避免中文/空格文件名被转义成带引号的形式。
+      const out = execFileSync(
+        'git', ['ls-files', '--others', '--ignored', '--exclude-standard', '-z'],
+        { cwd: ROOT, encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024 * 1024, stdio: 'pipe' },
+      );
+      // 只取**目录级别**的忽略前缀，逐文件比对太脆（新文件随时增删）。
+      // 一个被忽略的目录，其下所有文件的相对路径都以 `<dir>/` 开头。
+      const entries = out.split('\0').filter(Boolean);
+      ignoredSet = new Set();
+      for (const e of entries) {
+        ignoredSet.add(e.replace(/\/$/, ''));
+        const seg = e.split('/')[0];
+        if (seg && seg !== e) ignoredSet.add(seg);
+      }
+    }
+  } catch { /* 不是 git 仓库 / 无 git：保持 null，全都查 */ }
+
+  // 判断某个相对路径是否落在被忽略的范围里
+  const isIgnored = (rel) => {
+    if (ignoredSet === null || ignoredSet.size === 0) return false;
+    if (ignoredSet.has(rel)) return true;
+    // 任一前缀段命中（例如 `.snapshots` 命中 `.snapshots/20261020-122245/x.js`）
+    let acc = '';
+    for (const seg of rel.split('/')) {
+      acc = acc ? `${acc}/${seg}` : seg;
+      if (ignoredSet.has(acc)) return true;
+    }
+    return false;
+  };
+
+  const bad = [];
+  let scanned = 0;
+  let skippedIgnored = 0;
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name.startsWith('.tmp')) continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      const low = e.name.toLowerCase();
+      if (!exts.some((x) => low.endsWith(x))) continue;
+      // 只有**被 .gitignore 排除**的才跳过（见上方四轮说明）。
+      // "未跟踪但没被忽略"的文件必须照查 —— 它将来会入库。
+      if (isIgnored(p.slice(ROOT.length + 1).replace(/\\/g, '/'))) {
+        skippedIgnored += 1;
+        continue;
+      }
+      scanned += 1;
+      try {
+        const buf = readFileSync(p);
+        if (buf.includes(13)) bad.push(p.slice(ROOT.length + 1));
+      } catch { /* 读不到就跳过 */ }
+    }
+  };
+  walk(ROOT);
+
+  // 反向证明：确认真的扫到了文件，否则这条是恒真空过滤
+  assert.ok(scanned >= 30,
+    `只扫到 ${scanned} 个未被忽略的文本文件（跳过被忽略的 ${skippedIgnored} 个），`
+    + '明显偏少 —— 判据可能失效（空过滤）');
+
+  assert.deepEqual(bad, [],
+    `以下文本文件出现 CR（CRLF 行尾），与 .gitattributes 的 eol=lf 不一致。`
+    + `这会让工作树字节与提交/发布出去的字节不同，任何按字节校验都会对不上。`
+    + `\n检查范围（从 .gitattributes 解析）: ${exts.join(' ')}`
+    + `\n共扫描 ${scanned} 个文件，违规 ${bad.length} 个:\n` + bad.join('\n'));
 });
 // ── D17: README 的联网说明必须涵盖"检查更新" ────────────────────────────
 test('D17: README 如实说明检查更新也会联网', () => {
@@ -2186,4 +2343,77 @@ test('D20: engines.dsh 必须有实测下界 + 上界，且与 README 一致', (
     'README 必须写明实测的 DSH 版本');
   assert.doesNotMatch(readme, /0\.1\.7-rc\.2 或更高/,
     'README 不能再说"0.1.7-rc.2 或更高" —— 那个版本没测过');
+});
+
+// ── D21: 发布包生成的 package.json 必须是纯 LF ────────────────────────────
+//
+// ## 这条是 2026-10-25 在**发布包里**跑测试时抓出来的
+//
+// `release.ps1` 第 3.5 步会「在发布包里跑一遍 npm run test:all」（模拟 CI 的
+// 真实环境）。D16b 在那里红了：
+//
+//     共扫描 107 个文件，违规 1 个: package.json
+//
+// 根因不在 D16b，而在生成端 —— `release-build.ps1` 用
+// `ConvertTo-Json` 产出 JSON，而它**在 PowerShell 5.1 和 7.6 上都输出 CRLF**
+// （实测 `.Contains([char]13)` 为 True）。于是：
+//
+//     源仓 package.json      纯 LF（.gitattributes 的 `*.json text eol=lf`）
+//     发布包 package.json    CRLF     ← ConvertTo-Json 写出来的
+//     npm 上 v0.5.2 那份     CRLF     ← 实测 CR=77，历史产物一直如此
+//
+// 站内 D16 系列只查**源目录**，所以这个差异从来没在开发机上暴露过；
+// 只有「在发布包里跑测试」那一步才看得见。这属于"我们的产物与我们声称的
+// 字节不一致"，正是 .gitattributes 注释里写明要杜绝的事。
+//
+// ## 为什么用静态判据而不是真跑一次 release-build
+//
+// 真跑一次实测 4.03 秒（复制 138 个文件 + 语音包筛选 + git log 生成 CHANGELOG），
+// 超出日常检查器 ≤3 秒的预算，且会往磁盘写 6 MB。所以这里只静态断言
+// 「归一化那一行还在、并且排在 WriteAllText 之前」；
+// 真正的端到端证据由 `release.ps1` 的第 3.5 步（在发布包里跑全量测试）提供。
+test('D21: 生成 package.json 前必须把行尾归一成 LF', { skip: SKIP_DEVONLY }, () => {
+  const rb = readFileSync(RELEASE_BUILD, 'utf8');
+
+  // ① 归一化语句必须存在
+  const NORMALIZE = /^\$json\s*=\s*\$json\s*-replace\s+"`r`n"\s*,\s*"`n"/m;
+  const mNorm = rb.match(NORMALIZE);
+  assert.ok(mNorm,
+    'release-build.ps1 里找不到把 $json 行尾归一成 LF 的语句。\n'
+    + 'ConvertTo-Json 在 PowerShell 5.1 与 7.6 上都输出 CRLF，'
+    + '不归一化就会让发布包/npm 上的 package.json 与源仓字节不同'
+    + '（2026-10-25 实测 v0.5.2 的 npm 包 CR=77）。');
+
+  // ② 它必须排在写 package.json 之前 —— 否则"归一化了但没写进去"
+  const iNorm = rb.indexOf(mNorm[0]);
+  const NORM_NOTE = '归一化语句必须出现在写 package.json 之前，否则等于没生效';
+  const writePj = rb.indexOf("WriteAllText((Join-Path $Destination 'package.json')");
+  assert.ok(writePj > 0,
+    '找不到写 package.json 的 WriteAllText —— 若生成方式变了，请同步改本条用例');
+  assert.ok(iNorm < writePj, NORM_NOTE);
+
+  // ③ 归一化之后不许再整体重赋 $json —— 否则归一化会被后面那行覆盖掉。
+  //    ⚠️ 第一版这里写成 `/\$json\s*=\s*(?!\$json)/`，**判据本身是错的**：
+  //    `\s*` 可以回溯到只匹配 0 个字符，负向先行断言落在空格上就通过了，
+  //    于是 `$json = $json -replace ...` 这**唯一合法**的形态反被判违规（假红）。
+  //    改成数赋值次数：区间内 `$json =` 只该出现 1 次（即归一化那行自己的左边）。
+  const tail = rb.slice(iNorm, writePj);
+  const assigns = tail.match(/\$json\s*=/g) || [];
+  assert.equal(assigns.length, 1,
+    '归一化语句与写入之间又出现了 $json 赋值（共 ' + assigns.length + ' 处 '
+    + '`$json =`，只该有归一化那一处） —— 后赋值会把归一化结果覆盖掉');
+
+  // ④ 写入用的必须就是 $json 本身（不是被改名/被换掉的另一个变量）
+  const writeStmt = rb.slice(writePj, writePj + 200);
+  assert.ok(/\$json\s*\+/.test(writeStmt),
+    '写 package.json 时用的不是 $json —— 归一化作用不到真正落盘的字节上');
+
+  // ④ 反向证明：把归一化那行删掉，判据必须能报红
+  //    （照搬 D19d 的做法：不能只有"看起来还在"，要能证明它真的会失败）
+  {
+    const mutated = rb.replace(mNorm[0], '# [D21 变异：删掉归一化]');
+    assert.notEqual(mutated, rb, 'D21 变异未生效 —— 正则与真实源码不匹配');
+    assert.ok(!NORMALIZE.test(mutated),
+      'D21 的判据抓不住"归一化被删掉"这种情况，等于装饰');
+  }
 });

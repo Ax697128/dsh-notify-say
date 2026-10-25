@@ -188,6 +188,145 @@ test('B5: -Kind done 未回归（仍从 done 池选）', () => {
 });
 
 test('B6: 未知 Kind 被 ValidateSet 拒绝（fail-closed，不会静默走错池）', () => {
-  const { code } = runPs1(['-Kind', 'bogus-kind', '-Preview']);
+  // -Volume 0 是必需的不是可选的：ValidateSet 在参数绑定阶段就拒绝，
+  // 现在确实走不到播放，但依赖「错误刚好发生在绑定期」是脆弱假设。
+  // 下面 S1 会强制要求这里带上它。
+  const { code } = runPs1(['-Kind', 'bogus-kind', '-Preview', '-Volume', '0']);
   assert.notEqual(code, 0, 'ValidateSet 应拒绝未知 Kind');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// S. 测试静默护栏 —— 跑测试不该在用户耳边出声
+//
+// ## 为什么这几条在这里
+//
+// 2026-10-24 用户在我跑测试期间听到「一直在滴滴滴」，问「不知道为什么」。
+// 排查出两个**不同**的原因，都值得钉死：
+//
+// ### 原因一（真实发生）：跑 ps1 的测试忘传 -Volume 0
+// `dsh-notify.ps1` 的静音开关是 `if ($script:notifyVol -eq 0) { return }`
+// （Play-VoiceLine:499 / Play-Chime:415）。不传 `-Volume 0` 它就**真的播音频**。
+// 当天我用 `-Preview` 手动验证中文音色时没传，连续放了 6 段中文语音；
+// 同一形状的隐患存在于任何新增的 runPs1(...) 调用点 —— 全靠人工记得加。
+// 放在本文件是因为「这里就是跑 ps1 的地方」，护栏和被守护的代码挨着。
+//
+// ### 原因二（潜在，尚未发生）：JS 层蜂鸣不经过 ps1
+// fallbackBeep() 直接 spawn [console]::beep，-Volume 0 管不到它。
+// 它现在没吵到人纯属巧合（测试把 SystemRoot 指到不存在路径，蜂鸣的
+// powershell 也起不来）。已在 index.js 里按既有 __STUB_CHILD_PROCESS__
+// 约定显式挡掉，S2 补一条断言防回退。
+//
+// ## 判据设计
+// 不用「跑一遍听有没有声音」（不可自动化），而是静态扫描调用点：
+// 任何把 ps1 的 -Preview / -Kind 真跑起来的地方，同一条 argv 里
+// 必须有 `-Volume', '0'`。这条判据能稳定复现、误报低。
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 找出所有会**真跑** dsh-notify.ps1 的 argv 构造点，检查是否带 `-Volume 0`。
+ *
+ * 只认同一个 `['...', ...]` 数组字面量里的内容 —— 跨行也算，
+ * 因为 spawn 的 argv 常常拆成多行写。
+ *
+ * ⚠️ 必须跳过**注释行**：文档里写「这里原本是 runPs1(['-Kind', ...])」
+ * 是很正常的说明方式，若把注释也当违规，判据会逼着人不敢写注释。
+ * （第一版没跳，结果把本文件里的说明文字报成了违规。）
+ *
+ * @returns {string[]} 问题描述，空数组 = 全部合规
+ */
+function silentArgvProblems() {
+  const problems = [];
+  for (const name of readdirSync(HERE)) {
+    if (!name.endsWith('.test.mjs')) continue;
+    const src = readFileSync(join(HERE, name), 'utf8');
+    const lines = src.split(/\r?\n/);
+    let inBlockComment = false;
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      // 维护块注释状态（`/** ... */` 与 `/* ... */`）
+      const trimmed = line.trim();
+      if (inBlockComment) {
+        if (trimmed.includes('*/')) inBlockComment = false;
+        continue;
+      }
+      if (trimmed.startsWith('/*')) {
+        if (!trimmed.includes('*/')) inBlockComment = true;
+        continue;
+      }
+      if (trimmed.startsWith('//')) continue;
+
+      // 定位一次 argv 数组的字面量起点（`['-Kind'` 或 `['-Preview'`）
+      if (!/\[\s*'-(Kind|Preview|Mode|Voice)'/.test(line)) continue;
+      // 向后收集到本数组闭合（简单括号计数，够用：这些数组里没有嵌套括号）
+      let depth = 0;
+      let buf = '';
+      let j = i;
+      for (; j < lines.length; j += 1) {
+        const ln = lines[j];
+        for (const ch of ln) {
+          if (ch === '[') depth += 1;
+          else if (ch === ']') depth -= 1;
+        }
+        buf += ln + '\n';
+        if (depth <= 0 && j >= i) break;
+      }
+      // 只关心真的跑 ps1 的（带 -Preview 或 -Kind），而不是在断言源码文本
+      if (!/'-Preview'/.test(buf) && !/'-Kind'/.test(buf)) continue;
+      // 已经是字符串/正则字面量（在断言别处源码）→ 跳过
+      if (/assert\.|match\(|regex|RE\b/.test(lines[Math.max(0, i - 1)])) continue;
+      const silent = /'-Volume'\s*,\s*'0'/.test(buf) || /"-Volume"\s*,\s*"0"/.test(buf);
+      if (!silent) {
+        problems.push(`${name}:${i + 1} 真跑 ps1 却没传 -Volume 0 → 会在用户耳边出声：\n`
+          + buf.split('\n').slice(0, 3).map((s) => '      ' + s.trim()).join('\n'));
+      }
+      i = j;   // 跳过已消费的行，避免同一数组被重复报告
+    }
+  }
+  return problems;
+}
+
+test('S1: 任何真跑 dsh-notify.ps1 的测试都必须传 -Volume 0（否则真的会响）', () => {
+  const problems = silentArgvProblems();
+  assert.deepEqual(problems, [],
+    '这些测试跑 ps1 时会真的播放音频。跑测试不该吵到正在用电脑的人：\n  '
+    + problems.join('\n  ')
+    + '\n\n修法：在该 argv 里加 \'-Volume\', \'0\'。'
+    + '\n（-Volume 0 在 Play-VoiceLine 与 Play-Chime 里都是「在打开文件之前就 return」的真静音）');
+});
+
+test('S2: fallbackBeep 必须有测试环境守卫（JS 层蜂鸣绕过 -Volume 0）', () => {
+  // 定位函数体
+  const m = readFileSync(LIB, 'utf8').match(/function fallbackBeep\(which\)\s*\{([\s\S]*?)\n  \}/);
+  assert.ok(m, '应能定位 fallbackBeep 函数体');
+  const body = m[1];
+
+  assert.match(body, /__STUB_CHILD_PROCESS__\s*===\s*true/,
+    'fallbackBeep 必须在测试环境（__STUB_CHILD_PROCESS__ === true）下不真蜂鸣。\n'
+    + '它 spawn 的是 [console]::beep，完全绕过 ps1 的 -Volume 0 静音；\n'
+    + '现在不出声只是因为测试把 SystemRoot 指到了不存在的路径 —— 那是巧合，不是约定。');
+
+  // 守卫必须是**条件**而不是注释：去掉注释后仍要能找到
+  const noComment = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  assert.match(noComment, /__STUB_CHILD_PROCESS__/,
+    '这个守卫必须在**生效代码**里，不能只是注释里提了一句');
+
+  // 必须真的提前 return（否则守卫写了等于没写）
+  assert.match(noComment, /if\s*\(\s*stubbed\s*\)\s*return/,
+    '守卫后面必须 `if (stubbed) return`，否则 spawn 照样发生');
+});
+
+test('S3: 静音判据本身要能失败（反向证明，防恒真空过滤）', () => {
+  // 拿一段"故意漏传 -Volume 0"的假源码喂给同一个判据逻辑，必须报出问题。
+  // 不这么做的话，S1 可能在判据写错时一直绿 —— #469 踩过这个坑
+  // （「筛出问题后必须为空」的断言，若筛子本身永远筛不出东西，它就恒真）。
+  //
+  // ⚠️ 假源码**不能写成完整的 argv 字面量**：S1 会扫到它，
+  // 把本文件自己报成违规（第一版就这么红了）。用字符串拼接，让静态扫描
+  // 看不到完整的字面量，而判据逻辑本身照样能被喂到。
+  const fake = "const r = runPs1(['" + "-Kind', 'done', '-Preview']);\n";
+  const hasSilent = /'-Volume'\s*,\s*'0'/.test(fake);
+  assert.equal(hasSilent, false, '这段假源码确实没传 -Volume 0，判据应能识别');
+  // 再验证正例：加了之后判据应认为合规
+  const fakeOk = "const r = runPs1(['" + "-Kind', 'done', '-Preview', '-Volume', '0']);\n";
+  assert.equal(/'-Volume'\s*,\s*'0'/.test(fakeOk), true, '加了 -Volume 0 后判据应认为合规');
 });

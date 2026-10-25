@@ -41,6 +41,15 @@ param(
   [string]$Voice = '',
   [ValidateSet('fixed', 'random')]
   [string]$Mode = '',
+  # v0.5.3：语音包语言（ja / zh）。决定「随机」时抽哪个语言的台词池。
+  #
+  # 为什么需要：池子是中日混放的（done 池 115 个里日语 103、中文 12），
+  # 从前 random 就是整个目录随便抓一个 → 大约每 10 次提醒蹦一句中文，
+  # 用户听同一件事的提醒语言却来回跳。有了这个参数，随机只在同语言内抽。
+  #
+  # 空 = 不限制（向后兼容：老调用方不传时行为与从前一致）。
+  [ValidateSet('', 'ja', 'zh')]
+  [string]$Lang = '',
   [ValidateSet('done', 'question', 'approval', 'fail', 'chime')]
   [string]$Kind = 'done',
   [int]$Volume = -1,
@@ -176,6 +185,10 @@ function Pick-RandomWav([string]$dir, [string]$pattern) {
 #
 # 语义与 Pick-RandomWav 一致，只是从“单目录”变成“跨根”（前面的根优先，但都参与）。
 # 旧函数保留：master-voice 与梗音效池仍用单目录。
+#
+# v0.5.3：加了语言过滤。**过滤在跨根聚合之后做**（不是每个根各自过滤），
+# 这样"用户目录里有中文、插件目录里只有日语"时，选 zh 仍能在全部根里找中文，
+# 而不是在前面的根里找不到就直接判失败。
 function Pick-RandomWavFromRoots([string]$Pool, [string]$Pattern) {
   $all = @()
   foreach ($root in $script:voiceRoots) {
@@ -185,6 +198,10 @@ function Pick-RandomWavFromRoots([string]$Pool, [string]$Pattern) {
     foreach ($f in $files) { $all += $f }
   }
   if ($all.Count -eq 0) { return '' }
+  # v0.5.3：语言过滤（跨根聚合之后）。过滤完为空时**退回未过滤**，
+  # 宁可放一句别的语言，也不要整段静音 —— 提醒不响比语言跳更糟。
+  $filtered = @(Select-WavByLang $all $Lang)
+  if ($filtered.Count -gt 0) { $all = $filtered }
   return ($all | Get-Random).FullName
 }
 
@@ -196,6 +213,21 @@ function Find-InVoiceRootsExact([string]$Pool, [string]$FileName) {
     if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
   }
   return ''
+}
+
+# v0.5.3：按语言过滤 wav 列表。
+#
+# 约定（唯一事实源）：中文音色的 key 一律以 `zh-` 开头（zh-low-male / zh-mid-male /
+# zh-clear-female / zh-soft-female），日语 VOICEVOX 音色不带该前缀。
+# release-build.ps1 的 $NeverShipVoicePrefixes 与 lib/client.js 的 VOICE_KEYS
+# 都按同一约定划分，测试 cross-check 防漂移。
+#
+# ⚠️ 用文件名前缀而不是维护第二份语言清单：清单会漂移，前缀是命名契约本身。
+function Select-WavByLang($Files, [string]$Lang) {
+  if (-not $Lang) { return $Files }
+  if ($Lang -eq 'zh') { return @($Files | Where-Object { $_.Name -like 'zh-*' }) }
+  if ($Lang -eq 'ja') { return @($Files | Where-Object { $_.Name -notlike 'zh-*' }) }
+  return $Files
 }
 
 $picked = ''

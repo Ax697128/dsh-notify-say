@@ -93,7 +93,7 @@ param(
   [switch]$Clear,
   [switch]$ListVoices,
   # ── 语音包管理（按需下载）────────────────────────────────────────────────
-  # 完整语音包 47.93 MB；核心包只带一个音色。没装语音包时自动回退系统提示音。
+  # 完整语音包约 53 MB；核心包只带 2 个音色（1 日语 + 1 中文）。没装语音包时自动回退系统提示音。
   [switch]$ListPacks,
   [string]$PurgeVoice,
   [switch]$InstallHint,
@@ -338,7 +338,7 @@ function Show-Packs {
   Write-Host ("  合计 {0} 个音色 / {1:N2} MB" -f $acc.Count, $totalMB) -ForegroundColor Cyan
   Write-Host ""
   Write-Host "  说明：只装了 done 的音色，在失败时会**在同池内换音色**或回落提示音（不会播错语义）。" -ForegroundColor DarkGray
-  Write-Host "  完整语音包约 48 MB；核心包只需 1 个音色。删掉不用的用 -PurgeVoice <key>。" -ForegroundColor DarkGray
+  Write-Host "  完整语音包约 53 MB；核心包自带 2 个音色（1 日语 + 1 中文）。删掉不用的用 -PurgeVoice <key>。" -ForegroundColor DarkGray
 }
 
 # ── 语音包管理：删除某音色 ──────────────────────────────────────────────────
@@ -377,23 +377,26 @@ function Remove-VoicePack([string]$key) {
 function Show-InstallHint {
   Write-Host "=== 如何获得更多语音 ===" -ForegroundColor Cyan
   Write-Host ""
-  Write-Host "  核心包只带 1 个日语音色（约 1 MB）。完整多音色包体积较大，故不随包发布。" -ForegroundColor Gray
+  Write-Host "  核心包自带 2 个音色：ずんだもん（日语）+ 温柔女声（中文），约 4 MB。"
+  Write-Host "  另有 15 个音色（12 日语 + 3 中文）按需下载，合计约 49 MB，故不随包发布。"
   Write-Host ""
-  Write-Host "  A) 自己合成（推荐，零分发成本、可自选音色）" -ForegroundColor Green
+  Write-Host "  A) 在设置页里下载（推荐）" -ForegroundColor Green
+  Write-Host "     打开 DSH 设置 → 通知 → 语音包 → 选音色 → 点「下载」。"
+  Write-Host "     下载完先校验 SHA-256，与 packs.json 登记的不一致会直接丢弃。"
+  Write-Host ""
+  Write-Host "  B) 自己合成（想用清单外的音色时）" -ForegroundColor Green
   Write-Host "     1. 安装 VOICEVOX（本地免费 TTS 引擎，约 1 GB）"
   Write-Host "     2. 启动引擎（默认 http://127.0.0.1:50021）"
-  Write-Host "     3. 跑仓库里的合成脚本："
-Write-Host "        （合成脚本尚未随包发布；音色下载功能开发中）" -ForegroundColor DarkGray
-Write-Host "        临时方案：手动在 VOICEVOX 里合成，把 wav 放进下面的 B) 目录"
+  Write-Host "     3. 本次不提供现成合成脚本；手动在 VOICEVOX 里合成，把 wav 放进下面的 C) 目录"
   Write-Host ""
-  Write-Host "  B) 从他人镜像下载（如提供）" -ForegroundColor Green
+  Write-Host "  C) 从他人镜像下载（如提供）" -ForegroundColor Green
   Write-Host "     把 wav 放进 <插件根>\sounds\voice-lines\ 及子目录："
   Write-Host "       done     -> sounds\voice-lines\<key>~N.wav"
   Write-Host "       question -> sounds\voice-lines\question\<key>~N.wav"
   Write-Host "       approval -> sounds\voice-lines\approval\<key>~N.wav"
   Write-Host "       fail     -> sounds\voice-lines\fail\<key>~N.wav"
   Write-Host ""
-  Write-Host "  C) 不装任何语音包（也是完全可用的配置）" -ForegroundColor Green
+  Write-Host "  D) 不装任何语音包（也是完全可用的配置）" -ForegroundColor Green
   Write-Host "     通知 = Windows Toast + 系统提示音。用 -Voice off 可只留 Toast。" -ForegroundColor DarkGray
   Write-Host ""
   Write-Host "  装好后用 -ListPacks 查看，用 -VoiceName <key> 选定音色。" -ForegroundColor Gray

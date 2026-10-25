@@ -3,6 +3,12 @@
 > 本文件由 `tools/release-build.ps1` 从开发提交自动生成，**请勿手工编辑**。
 > 只列面向使用者的变更（新增功能与修复），不含内部维护提交。
 
+## v0.5.3 — 2026-10-24
+
+- feat(voice): 中日语音分开，随机模式不再中日混播（voiceLang）
+- fix(voice): 老用户升级后随机池退回日语的行为回退（voiceLang 迁移）
+- fix(voice): 迁移写在 normalizeConfig 里是死代码，改到 refreshConfig 层（v0.5.3.1 修正）
+
 ## v0.5.2 — 2026-10-23
 
 - feat(voice): 新增 4 个中文音色（EmotiVoice 生成），自带「温柔女声」
@@ -10,6 +16,8 @@
 - fix(voice): 语音包区「核心包只带 1 个音色」改为 2 个
 - fix(test): 中文音色「整组缺席」曾静默通过 + 修 CHANGELOG 在 git 根布局下失效
 - fix(package): .gitattributes 不进 npm 包，且 D19 判据自身有两个方向都不对
+- fix(test): D19j 补上三处「判据被兜底顶替」的盲区，并修掉一条理由说反的规则
+- fix(test): 白名单项数收敛成单一事实源，修掉 D19b/D19f 口径分叉
 
 ## v0.5.0 — 2026-10-22
 
@@ -318,6 +326,8 @@
 
 ## 未发布
 
-- fix(test): D19j 补上三处「判据被兜底顶替」的盲区，并修掉一条理由说反的规则
-- fix(test): 白名单项数收敛成单一事实源，修掉 D19b/D19f 口径分叉
+- fix(voice): 首帧配置也要走迁移 —— refreshConfig 抛异常时老用户会停在未迁移状态
+- fix(voice): 迁移判据只看 config.json —— 真机上 patch 层无法区分「显式选择」与「schema 默认」
+- fix(test): D16b 只扫被 git 跟踪的文件，不再把 .snapshots 历史快照算成违规
+- fix(release): 发布包 package.json 的 CRLF，以及 D16b 在三种仓库形态下的误报
 
